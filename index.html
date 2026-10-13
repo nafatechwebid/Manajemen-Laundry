@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="id"><head><meta charset="utf-8"><meta name="referrer" content="strict-origin-when-cross-origin"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LaundryKu</title>
+<script src="config.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<style>@page{margin:8mm}html{-webkit-text-size-adjust:100%}@media print{body *{visibility:hidden}.pa,.pa *{visibility:visible}.pa{position:absolute;left:0;top:0;width:100%}}</style>
+</head><body class="bg-slate-100 text-slate-800"><div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback,useContext}=React;
+const LS=k=>localStorage.getItem(k)||'';
+const CFG=window.CFG||{};document.title=CFG.name||'LaundryKu';
+const real=v=>v&&!/XXXXXXXX|ISI_ANON/.test(v);const SU=real(CFG.url)?CFG.url:LS('su'),SK=real(CFG.key)?CFG.key:LS('sk');let sb=null;try{if(SU&&SK)sb=supabase.createClient(SU,SK)}catch(e){}
+const okUrl=u=>/^https:\/\/[a-z0-9-]+\.supabase\.co\/storage\//.test(u||'')?u:'#';
+const rp=n=>'Rp'+Math.round(n).toLocaleString('id-ID');
+const td=()=>new Date().toISOString().slice(0,10);
+const ST=['Dipesan','Dijemput','Antrean','Dicuci','Selesai','Diterima'];
+const WASH=[{n:'Mesin 1',cap:10},{n:'Mesin 2',cap:10},{n:'Mesin 3',cap:15}];
+const KOMISI=3000;
+const wl=o=>o.services.unit==='kg'?Math.min(15,+o.qty):Math.min(15,Math.ceil(o.qty/2));
+const calc=(s,q,ex)=>Math.round((s.min_price!=null&&s.min_qty>0?+s.min_price+Math.ceil(Math.max(q-s.min_qty,0))*(+s.extra_price||0):s.price*q)*(ex?s.express_multiplier:1));
+const fd=d=>new Date(d).toLocaleString('id-ID',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+const wibDate=d=>new Date((d?+new Date(d):Date.now())+7*36e5).toISOString().slice(0,10);
+const ym=()=>wibDate().slice(0,7);
+const mr=m=>{const [y,mo]=m.split('-').map(Number),n=mo===12?`${y+1}-01`:`${y}-${String(mo+1).padStart(2,'0')}`;return[`${m}-01T00:00:00+07:00`,`${n}-01T00:00:00+07:00`]};
+const fdist=(a,b)=>Math.sqrt(a.reduce((s,x,i)=>s+(x-b[i])**2,0));
+const getPos=()=>new Promise((res,rej)=>navigator.geolocation?navigator.geolocation.getCurrentPosition(p=>res(p.coords),e=>rej(Error(e.code===1?'Izin lokasi ditolak. Aktifkan izin Lokasi untuk situs ini.':'Lokasi tidak tersedia, nyalakan GPS.')),{enableHighAccuracy:true,timeout:15000,maximumAge:0}):rej(Error('Perangkat tidak mendukung GPS')));
+const FACE_URL='https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/';
+let faceP=null;
+function loadFace(){if(faceP)return faceP;faceP=new Promise((res,rej)=>{const go=async()=>{try{const u=FACE_URL+'model';await faceapi.nets.tinyFaceDetector.loadFromUri(u);await faceapi.nets.faceLandmark68TinyNet.loadFromUri(u);await faceapi.nets.faceRecognitionNet.loadFromUri(u);res()}catch(e){rej(e)}};
+ if(window.faceapi)return go();const s=document.createElement('script');s.src=FACE_URL+'dist/face-api.js';s.onload=go;s.onerror=()=>rej(Error('gagal'));document.head.appendChild(s)}).catch(()=>{faceP=null;throw Error('Modul pengenalan wajah gagal dimuat. Periksa koneksi internet lalu coba lagi.')});return faceP}
+const km=(a,b)=>{const r=Math.PI/180,h=Math.sin((b.lat-a.lat)*r/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin((b.lng-a.lng)*r/2)**2;return 12742*Math.asin(Math.sqrt(h))};
+
+function shrink(file,cb,W=320){const r=new FileReader();r.onload=()=>{const i=new Image();i.onload=()=>{const c=document.createElement('canvas');const k=W/i.width;c.width=W;c.height=i.height*k;c.getContext('2d').drawImage(i,0,0,c.width,c.height);cb(c.toDataURL('image/jpeg',.7))};i.src=r.result};r.readAsDataURL(file)}
+async function put(d,path){if(!/^(logo|qris)\//.test(path))path=path.replace(/\.jpg$/,'-'+Array.from(crypto.getRandomValues(new Uint8Array(8)),b=>b.toString(16).padStart(2,'0')).join('')+'.jpg');const b=await (await fetch(d)).blob();const r=await sb.storage.from('files').upload(path,b,{upsert:true,contentType:'image/jpeg'});if(r.error)throw r.error;return sb.storage.from('files').getPublicUrl(path).data.publicUrl+'?v='+Date.now()}
+const safe=f=>async(...a)=>{try{await f(...a)}catch(e){alert(e.message||'Terjadi kesalahan')}};
+
+const Card=({t,children,c=''})=><div className={'bg-white rounded-xl shadow p-4 '+c}>{t&&<h3 className="font-semibold mb-3">{t}</h3>}{children}</div>;
+const B=({c='bg-sky-600',...p})=><button {...p} className={`${c} text-white rounded-lg px-3 py-2 md:py-1.5 text-sm font-medium disabled:opacity-40 hover:brightness-110 ${p.className||''}`}/>;
+const I=p=><input {...p} className={'border rounded-lg px-2 py-2 md:py-1.5 text-sm w-full '+(p.className||'')}/>;
+const Sel=({o,...p})=><select {...p} className="border rounded-lg px-2 py-2 md:py-1.5 text-sm w-full">{o.map(x=>Array.isArray(x)?<option key={x[0]} value={x[0]}>{x[1]}</option>:<option key={x}>{x}</option>)}</select>;
+const Badge=({s})=><span className={'text-xs px-2 py-0.5 rounded-full '+(String(s).startsWith('Batal')?'bg-red-100 text-red-700':'bg-sky-100 text-sky-700')}>{s}</span>;
+function Sig({onSave}){const r=useRef(),d=useRef(false);
+ const p=e=>{const b=r.current.getBoundingClientRect(),t=e.touches?e.touches[0]:e;return[t.clientX-b.left,t.clientY-b.top]};
+ const go=e=>{d.current=true;const c=r.current.getContext('2d');c.beginPath();c.moveTo(...p(e))};
+ const mv=e=>{if(!d.current)return;const c=r.current.getContext('2d');c.lineTo(...p(e));c.stroke()};
+ const end=()=>{d.current=false;onSave(r.current.toDataURL('image/jpeg',.6))};
+ return <canvas ref={r} width={300} height={90} className="border rounded bg-white touch-none max-w-full" onMouseDown={go} onMouseMove={mv} onMouseUp={end} onTouchStart={go} onTouchMove={mv} onTouchEnd={end}/>}
+function QR({t}){const r=useRef();useEffect(()=>{r.current.innerHTML='';new QRCode(r.current,{text:t,width:96,height:96})},[t]);return <div ref={r}/>}
+function useOrders(){const [o,setO]=useState([]);
+ const load=useCallback(()=>sb.from('orders').select('*,customers(name,phone,points,strikes),services(name,unit),addresses(address,lat,lng)').order('created_at',{ascending:false}).limit(200).then(r=>r.data&&setO(r.data)),[]);
+ useEffect(()=>{load();const t=setInterval(load,8000);return()=>clearInterval(t)},[]);return[o,load]}
+
+function Setup(){const [a,sa]=useState({u:'',k:''});
+ return <Card t="Hubungkan Supabase" c="max-w-sm mx-auto mt-10"><div className="space-y-2 text-sm">
+  <I placeholder="Project URL (https://xxxx.supabase.co)" value={a.u} onChange={e=>sa({...a,u:e.target.value.trim()})}/>
+  <I placeholder="anon public key" value={a.k} onChange={e=>sa({...a,k:e.target.value.trim()})}/>
+  <B className="w-full" onClick={()=>{localStorage.setItem('su',a.u);localStorage.setItem('sk',a.k);location.reload()}}>Simpan & Mulai</B>
+  <div className="text-xs text-slate-500">Isi dari Supabase → Project Settings → API. Hanya anon key (publik), jangan service_role.</div></div></Card>}
+
+function PassInput({value,onChange,placeholder}){const [s,setS]=useState(false);
+ return <div className="relative"><I type={s?'text':'password'} placeholder={placeholder||'Password'} value={value} onChange={onChange} className="pr-10"/><button type="button" aria-label="Tampilkan atau sembunyikan password" onClick={()=>setS(!s)} className="absolute right-2 top-1.5 text-lg">{s?'🙈':'👁️'}</button></div>}
+function Auth({start,back}){const [m,sm]=useState(start||'login'),[a,sa]=useState({name:'',phone:'',email:'',pw:'',code:''});
+ const go=safe(async()=>{if(!a.email||a.pw.length<8||(m==='daftar'&&(!a.name||!a.phone)))throw Error('Lengkapi data (password minimal 8 karakter)');
+  if(m==='daftar'&&a.code.trim()){const c=await sb.rpc('invite_ok',{c:a.code});if(!c.data)throw Error('Kode undangan tidak valid, sudah dipakai, atau kedaluwarsa')}
+  const r=m==='daftar'?await sb.auth.signUp({email:a.email,password:a.pw,options:{data:{full_name:a.name,phone:a.phone,invite_code:a.code.trim()}}}):await sb.auth.signInWithPassword({email:a.email,password:a.pw});
+  if(r.error)throw r.error;if(!r.data.session)alert('Cek email Anda untuk konfirmasi, lalu login.')});
+ const forgot=safe(async()=>{if(!a.email)throw Error('Isi email dulu, lalu tekan Lupa password');const r=await sb.auth.resetPasswordForEmail(a.email,{redirectTo:location.origin+location.pathname});if(r.error)throw r.error;alert('Link reset password dikirim ke email Anda. Cek inbox atau folder spam.')});
+ return <Card t={m==='daftar'?'Daftar':'Masuk'} c="max-w-sm mx-auto mt-10"><div className="space-y-2">
+  {m==='daftar'&&<><I placeholder="Nama lengkap" value={a.name} onChange={e=>sa({...a,name:e.target.value})}/><I placeholder="No. WhatsApp" value={a.phone} onChange={e=>sa({...a,phone:e.target.value})}/></>}
+  <I type="email" placeholder="Email" value={a.email} onChange={e=>sa({...a,email:e.target.value})}/><PassInput value={a.pw} onChange={e=>sa({...a,pw:e.target.value})}/>
+  {m==='daftar'&&<I placeholder="Kode undangan (khusus karyawan, pelanggan kosongkan)" value={a.code} onChange={e=>sa({...a,code:e.target.value})}/>}
+  <B className="w-full" onClick={go}>{m==='daftar'?'Daftar':'Masuk'}</B>
+  {m==='login'&&<div className="text-xs text-center text-sky-700 cursor-pointer" onClick={forgot}>Lupa password?</div>}
+  <div className="text-xs text-center text-sky-700 cursor-pointer" onClick={()=>sm(m==='daftar'?'login':'daftar')}>{m==='daftar'?'Sudah punya akun? Masuk':'Pelanggan baru? Daftar'}</div>
+  {back&&<div className="text-xs text-center text-slate-500 cursor-pointer" onClick={back}>← Kembali ke halaman depan</div>}
+  <div className="text-xs text-slate-400">Karyawan (kasir/driver/staf): daftar dengan kode undangan dari Owner.</div></div></Card>}
+function ResetPass({done}){const [pw,setPw]=useState(''),[p2,setP2]=useState('');
+ const ok=safe(async()=>{if(pw.length<8)throw Error('Password minimal 8 karakter');if(pw!==p2)throw Error('Kedua password tidak sama');const r=await sb.auth.updateUser({password:pw});if(r.error)throw r.error;alert('Password berhasil diganti');done()});
+ return <Card t="Buat Password Baru" c="max-w-sm mx-auto mt-10"><div className="space-y-2"><PassInput value={pw} onChange={e=>setPw(e.target.value)} placeholder="Password baru"/><PassInput value={p2} onChange={e=>setP2(e.target.value)} placeholder="Ulangi password baru"/><B className="w-full" onClick={ok}>Simpan Password</B></div></Card>}
+const UnCtx=React.createContext({un:{},tot:{kasir:0,driver:0,customer:0},refresh:()=>{}});
+function UnreadProvider({role,children}){const [r,setR]=useState({un:{},tot:{kasir:0,driver:0,customer:0}});
+ const views={owner:['kasir','driver','customer'],kasir:['kasir'],driver:['driver'],customer:['customer']}[role]||[];
+ const refresh=useCallback(async()=>{const un={},tot={kasir:0,driver:0,customer:0};
+  for(const v of views){const x=await sb.rpc('chat_unread',{v});if(!Array.isArray(x.data))continue;x.data.forEach(z=>{un[z.order_id+'|'+z.channel+'|'+v]=z.n;tot[v]+=z.n})}setR({un,tot})},[role]);
+ useEffect(()=>{refresh();const i=setInterval(refresh,8000);return()=>clearInterval(i)},[role]);
+ const all=r.tot.kasir+r.tot.driver+r.tot.customer;
+ useEffect(()=>{document.title=(all>0?`(${all}) `:'')+(CFG.name||'LaundryKu')},[all]);
+ return <UnCtx.Provider value={{...r,refresh}}>{children}</UnCtx.Provider>}
+const Bdg=({n})=>n>0?<span className="ml-1.5 inline-flex min-w-[1.25rem] h-5 px-1 items-center justify-center rounded-full bg-red-600 text-white text-xs font-bold ring-2 ring-white">{n>99?'99+':n}</span>:null;
+function UnBanner({view}){const {tot}=useContext(UnCtx),n=tot[view];return n>0?<div className="bg-red-50 border border-red-300 text-red-700 rounded-lg px-3 py-2 text-sm font-semibold mb-3">🔔 {n} pesan chat belum dibaca</div>:null}
+function TabBtn({x,cur,role,on}){const {tot}=useContext(UnCtx);const n=x==='Kasir'&&(role==='kasir'||role==='owner')?tot.kasir:x==='Driver'&&(role==='driver'||role==='owner')?tot.driver:x==='Pelanggan'&&(role==='customer'||role==='owner')?tot.customer:0;
+ return <B c={cur===x?'bg-sky-600':'bg-slate-400'} onClick={()=>on(x)}>{x}<Bdg n={n}/></B>}
+function Chat({o,u,close,ch='kasir',view='kasir'}){const [m,setM]=useState([]),[t,setT]=useState(''),[b,setB]=useState(false),end=useRef(),last=useRef(0),{refresh}=useContext(UnCtx);
+ const ld=async()=>{const r=await sb.from('order_messages').select('*').eq('order_id',o.id).eq('channel',ch).order('created_at');if(!r.data)return;setM(r.data);const l=r.data.length?r.data[r.data.length-1].id:0;if(l&&l!==last.current){last.current=l;await sb.rpc('chat_mark_read',{oid:o.id,ch,v:view==='customer'?'customer':'staff'});refresh()}};
+ useEffect(()=>{ld();const i=setInterval(ld,5000);return()=>clearInterval(i)},[o.id,ch,view]);
+ useEffect(()=>{end.current&&end.current.scrollIntoView()},[m.length]);
+ const send=safe(async()=>{const s=t.trim();if(!s)return;setB(true);try{const r=await sb.from('order_messages').insert({order_id:o.id,sender_id:u.id,body:s,channel:ch,sender_role:view==='customer'?'customer':'staff'});if(r.error)throw r.error;setT('');ld()}finally{setB(false)}});
+ return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-xl w-full max-w-sm flex flex-col" style={{maxHeight:'85vh'}}>
+  <div className="p-3 border-b flex justify-between items-center"><b>{ch==='driver'?'🛵 Chat kurir':'💬 Chat laundry'} · {o.id}</b><B c="bg-slate-500" onClick={close}>Tutup</B></div>
+  <div className="p-3 overflow-auto flex-1 space-y-2 text-sm">{m.length?m.map(x=>{const me=x.sender_id===u.id;return <div key={x.id} className={me?'text-right':''}><div className={'inline-block max-w-[85%] rounded-lg px-3 py-1.5 text-left '+(x.sender_role==='system'?'bg-amber-50 border border-amber-200':me?'bg-sky-100':'bg-slate-100')}>
+   <div className="text-[10px] text-slate-500">{x.sender_role==='system'?'Sistem':me?'Anda':x.sender_role==='staff'?(ch==='driver'?'Kurir/Staf':'Staf laundry'):'Pelanggan'} · {new Date(x.created_at).toLocaleString('id-ID',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>{x.body}{x.image_url&&<a href={okUrl(x.image_url)} target="_blank" rel="noopener noreferrer"><img src={x.image_url} className="h-20 mt-1 rounded"/></a>}</div></div>}):<div className="text-slate-400">{ch==='driver'?'Belum ada pesan. Gunakan untuk konfirmasi lokasi/patokan rumah antara pelanggan dan kurir.':'Belum ada pesan. Tulis pesan khusus atau konfirmasi di bawah.'}</div>}<div ref={end}/></div>
+  <div className="p-3 border-t flex gap-2"><I placeholder="Tulis pesan…" value={t} maxLength={1000} onChange={e=>setT(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()}/><B disabled={b||!t.trim()} onClick={send}>Kirim</B></div></div></div>}
+function useLastMsg(){const [m,setM]=useState({});
+ useEffect(()=>{const ld=()=>sb.from('order_messages').select('order_id,sender_role,created_at').order('created_at',{ascending:false}).limit(300).then(r=>{if(!r.data)return;const z={};r.data.forEach(x=>{if(!z[x.order_id])z[x.order_id]=x});setM(z)});ld();const i=setInterval(ld,8000);return()=>clearInterval(i)},[]);return m}
+function EstStandar({st,reload}){const [d,setD]=useState(st.regular_days||'2'),[h,setH]=useState(st.express_hours||'6');
+ const save=safe(async()=>{const r=await sb.from('settings').upsert([{key:'regular_days',value:String(d)},{key:'express_hours',value:String(h)}]);if(r.error)throw r.error;reload();alert('Estimasi standar tersimpan')});
+ return <Card t="Estimasi Waktu Selesai"><div className="text-xs text-slate-500 mb-2">Tampil sebagai catatan di panel pelanggan dan menjadi estimasi awal pesanan baru. Bisa diubah per pesanan lewat tombol "Estimasi" sesuai antrean.</div>
+  <div className="grid grid-cols-2 gap-2"><label className="text-xs">Reguler (hari)<I type="number" min="0.5" step="0.5" value={d} onChange={e=>setD(e.target.value)}/></label><label className="text-xs">Ekspres (jam)<I type="number" min="1" value={h} onChange={e=>setH(e.target.value)}/></label></div><B className="mt-2" onClick={save}>Simpan</B></Card>}
+function Pesanan({x,st,u,load}){const [chat,setChat]=useState(false),[pf,setPf]=useState(null),[b,setB]=useState(false),{un}=useContext(UnCtx);
+ const cancel=safe(async()=>{if(!confirm('Batalkan pesanan '+x.id+'? Pesanan yang sudah dijemput tidak bisa dibatalkan sendiri.'))return;const r=await sb.rpc('cancel_my_order',{oid:x.id});if(r.error)throw r.error;load()});
+ const wait=x.services.unit==='kg'&&+x.qty===0,paid=x.pay_status==='lunas',needPay=!paid&&x.pay_status==='belum_bayar'&&x.pay_method!=='COD'&&!wait;
+ const lbl=paid?'Lunas ✓':x.pay_status==='menunggu_verifikasi'?'Bukti bayar menunggu verifikasi kasir':x.pay_method==='COD'?'Bayar tunai saat diterima':wait?'Bayar setelah ditimbang':'Belum dibayar';
+ const send=safe(async()=>{if(!pf)throw Error('Pilih foto bukti pembayaran');setB(true);try{const url=await put(pf,`proofs/${u.id}/${x.id}-${Date.now()}.jpg`);const r=await sb.rpc('submit_proof',{oid:x.id,url});if(r.error)throw r.error;setPf(null);load()}finally{setB(false)}});
+ return <div className="mb-4 pb-3 border-b text-sm">
+  <div className="flex justify-between items-center"><b>{x.id}</b><Badge s={x.status}/></div>
+  <div className="text-xs text-slate-500">{x.services.name}{x.express?' · Ekspres':''} · {wait?'berat menunggu ditimbang':x.qty+' '+x.services.unit} · {x.pay_method}</div>
+  <div className="mt-1"><span className={'text-xs px-2 py-0.5 rounded-full '+(paid?'bg-green-100 text-green-700':'bg-amber-100 text-amber-700')}>{lbl}</span>{!wait&&<b className="ml-2">{rp(x.total)}</b>}</div>
+  {x.status!=='Diterima'&&x.est_done_at&&<div className="text-xs text-slate-500 mt-1">⏱️ Estimasi selesai: {fd(x.est_done_at)} ({x.express?'Ekspres':'Reguler'})</div>}
+  {wait&&<div className="text-xs bg-sky-50 rounded p-2 mt-1">⚖️ Cucian akan ditimbang kasir di outlet. Foto timbangan dan rincian biaya akan muncul di sini dan di chat.</div>}
+  {x.weigh_photo_url&&<div className="text-xs mt-2 bg-slate-50 rounded p-2 flex gap-2"><a href={okUrl(x.weigh_photo_url)} target="_blank" rel="noopener noreferrer"><img src={x.weigh_photo_url} className="h-14 rounded"/></a>
+   <div>{x.services.unit==='kg'?'Hasil timbangan':'Jumlah dikonfirmasi kasir'}: <b>{x.qty} {x.services.unit}</b>{x.qty_estimate!=null?` (estimasi awal ${x.qty_estimate})`:''}<br/>Subtotal {rp(x.subtotal||0)} · Antar-jemput {rp(x.delivery_fee||0)}{x.discount>0?` · Diskon -${rp(x.discount)}`:''}<br/><b>Total {rp(x.total)}</b></div></div>}
+  {needPay&&<div className="bg-amber-50 rounded p-2 mt-2 space-y-2 text-xs"><div className="font-semibold">{x.status==='Diterima'?'Pembayaran belum tercatat. ':''}Bayar {rp(x.total)}</div>
+   {x.pay_method==='QRIS'?(st.qris_url?<img src={st.qris_url} className="w-40 rounded border"/>:<div className="text-red-600">QRIS belum diunggah outlet.</div>):<div>Transfer ke <b>{st.rekening||'(rekening belum diisi outlet)'}</b></div>}
+   <label className="block">Unggah bukti pembayaran<input type="file" accept="image/*" onChange={e=>e.target.files[0]&&shrink(e.target.files[0],setPf,600)}/></label>{pf&&<img src={pf} className="h-16 rounded"/>}
+   <B disabled={b||!pf} onClick={send}>{b?'Mengirim…':'Kirim Bukti Bayar'}</B></div>}
+  {x.status==='Batal'?<div className="text-xs text-red-600 mt-2">❌ Pesanan dibatalkan.</div>:<div className="h-2 bg-slate-200 rounded mt-2"><div className="h-2 bg-sky-500 rounded" style={{width:Math.max(0,ST.indexOf(x.status))/5*100+'%'}}/></div>}
+  <div className="mt-2 flex gap-2 flex-wrap"><B c="bg-slate-700" onClick={()=>setChat('kasir')}>💬 Chat dengan laundry<Bdg n={un[x.id+'|kasir|customer']}/></B>
+   {!['Diterima','Batal'].includes(x.status)&&<B c="bg-teal-600" onClick={()=>setChat('driver')}>🛵 Chat kurir<Bdg n={un[x.id+'|driver|customer']}/></B>}
+   {x.status==='Dipesan'&&<B c="bg-red-600" onClick={cancel}>Batalkan pesanan</B>}</div>
+  {chat&&<Chat o={x} u={u} ch={chat} view="customer" close={()=>setChat(false)}/>}</div>}
+function Customer({u,sv,st}){
+ const [c,setC]=useState(null),[cp,setCp]=useState(null),[busy,setBusy]=useState(false),[gps,setGps]=useState(''),[o,load]=useOrders();
+ const [f,sf]=useState({svc:'',qty:1,ex:false,pd:td(),pt:'09:00',dd:td(),dt:'17:00',pay:'Transfer Bank',cp:'',redeem:false,proof:null,addr:'',pos:null,note:''});
+ const set=(k,v)=>sf(x=>({...x,[k]:v}));
+ useEffect(()=>{sb.from('customers').select('*').eq('user_id',u.id).maybeSingle().then(r=>setC(r.data));const t=setInterval(()=>sb.from('customers').select('*').eq('user_id',u.id).maybeSingle().then(r=>setC(r.data)),10000);return()=>clearInterval(t)},[]);
+ useEffect(()=>{const k=f.cp.trim().toUpperCase();if(!k)return setCp(null);sb.from('coupons').select('*').eq('code',k).eq('active',true).maybeSingle().then(r=>setCp(r.data))},[f.cp]);
+ const s0=sv.find(x=>x.id==f.svc)||sv[0];if(!s0||!c)return <div className="text-sm">Memuat…</div>;
+ const codMin=+(st.cod_min_done||1),doneN=o.filter(z=>z.status==='Diterima'&&z.pay_status==='lunas').length,codBlocked=(c.strikes||0)>=+(st.cod_strike_limit||2),codOk=doneN>=codMin&&!codBlocked;
+ const isKg=s0.unit==='kg',eh=st.express_hours||6,rd=st.regular_days||2,pct=Math.round((s0.express_multiplier-1)*100);
+ const base=isKg?0:calc(s0,f.qty,f.ex),disc=(cp?Math.min(base*cp.percent/100,cp.max_discount||1e12):0)+(f.redeem&&c.points>=100?10000:0),total=Math.max(0,base+5000-disc);
+ const mine=o.filter(x=>x.customer_id===c.id);
+ const tarif=s0.min_price!=null&&s0.min_qty>0?`${s0.min_qty} ${s0.unit} pertama ${rp(s0.min_price)}, tiap ${s0.unit} berikutnya +${rp(s0.extra_price||0)} (dibulatkan ke atas)`:`${rp(s0.price)} per ${s0.unit}`;
+ const locate=()=>{if(!navigator.geolocation)return setGps('Perangkat/browser ini tidak mendukung GPS.');setGps('Mencari lokasi GPS…');
+  navigator.geolocation.getCurrentPosition(async p=>{const pos={lat:p.coords.latitude,lng:p.coords.longitude};set('pos',pos);setGps('Mengambil alamat dari GPS…');let a='';
+   try{const r=await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&accept-language=id&lat=${pos.lat}&lon=${pos.lng}`);const j=await r.json();a=j.display_name||''}catch(e){}
+   sf(x=>({...x,pos,addr:a||`Titik GPS ${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)} (tambahkan patokan rumah)`}));
+   setGps(a?'Alamat terisi dari GPS. Periksa lagi dan tambahkan no. rumah/patokan bila perlu.':'Alamat otomatis tidak ditemukan, koordinat tersimpan. Tambahkan patokan rumah.')},
+  er=>setGps(er.code===1?'Izin lokasi ditolak. Aktifkan izin Lokasi untuk situs ini (ikon di samping alamat situs di Chrome → Izin), lalu coba lagi.':er.code===3?'Waktu pencarian GPS habis. Coba di tempat terbuka atau nyalakan GPS.':'Lokasi tidak tersedia. Nyalakan GPS lalu coba lagi.'),
+  {enableHighAccuracy:true,timeout:15000,maximumAge:0})};
+ const submit=safe(async()=>{if(!f.addr.trim())throw Error('Isi alamat jemput & antar, atau tekan "Pakai lokasi saya"');if(!isKg&&!(+f.qty>0))throw Error('Isi jumlah');if(!isKg&&f.pay!=='COD'&&!f.proof)throw Error('Unggah bukti pembayaran');setBusy(true);
+  try{const ad=await sb.from('addresses').insert({customer_id:c.id,address:f.addr.trim(),lat:f.pos&&f.pos.lat,lng:f.pos&&f.pos.lng,is_default:true}).select().single();if(ad.error)throw ad.error;
+  const proof=!isKg&&f.proof?await put(f.proof,`proofs/${u.id}/${Date.now()}.jpg`):null;
+  const r=await sb.from('orders').insert({customer_id:c.id,service_id:s0.id,qty:isKg?1:+f.qty,express:f.ex,address_id:ad.data.id,pickup_at:new Date(f.pd+'T'+f.pt).toISOString(),delivery_at:new Date(f.dd+'T'+f.dt).toISOString(),coupon_code:cp?cp.code:null,points_used:f.redeem?100:0,subtotal:0,total:0,pay_method:f.pay,payment_proof_url:proof}).select('id').single();
+  if(r.error)throw r.error;if(f.note.trim())await sb.from('order_messages').insert({order_id:r.data.id,sender_id:u.id,body:'Catatan pesanan: '+f.note.trim()});
+  sf(x=>({...x,proof:null,redeem:false,note:''}));load();alert(isKg?'Pesanan dibuat. Kasir akan menimbang cucian Anda, lalu rincian biaya dikirim lewat chat dan Pesanan Saya.':f.pay==='COD'?'Pesanan dibuat. Bayar tunai saat pakaian diantar.':'Pesanan dibuat. Bukti pembayaran menunggu verifikasi kasir.')}finally{setBusy(false)}});
+ return <div className="grid md:grid-cols-2 gap-4">
+ <Card t="Buat Pesanan"><div className="space-y-2">
+  <div className={isKg?'':'grid grid-cols-2 gap-2'}><Sel o={sv.map(x=>[x.id,x.name])} value={s0.id} onChange={e=>set('svc',e.target.value)}/>{!isKg&&<I type="number" min="1" step={s0.unit==='pcs'?1:'any'} value={f.qty} onChange={e=>set('qty',e.target.value)} placeholder={'Jumlah ('+s0.unit+')'}/>}</div>
+  {isKg&&<div className="bg-sky-50 rounded-lg p-3 text-xs space-y-1"><div className="font-semibold text-sm">⚖️ Ditimbang oleh kasir</div><div>Anda tidak perlu mengisi berat. Cucian ditimbang di outlet dan difoto, lalu hasil timbangan beserta rincian biaya dikirim lewat chat dan "Pesanan Saya".</div><div>Tarif {s0.name}: {tarif}.</div></div>}
+  <label className="text-sm flex gap-2"><input type="checkbox" checked={f.ex} onChange={e=>set('ex',e.target.checked)}/>Ekspres (+{pct}%)</label>
+  <div className={'text-xs rounded-lg p-2 '+(f.ex?'bg-amber-50 text-amber-800':'bg-slate-50 text-slate-600')}>{f.ex?`⚡ Ekspres: cucian selesai diproses maksimal ${eh} jam setelah diterima di outlet (tergantung antrean ekspres).`:`🕒 Reguler: cucian selesai diproses dalam ±${rd} hari setelah diterima di outlet. Lama pastinya ditentukan kasir sesuai antrean dan diinformasikan lewat chat.`}</div>
+  <I placeholder="Alamat jemput & antar" value={f.addr} onChange={e=>set('addr',e.target.value)}/>
+  <div className="flex gap-2 items-center flex-wrap"><B c={f.pos?'bg-emerald-600':'bg-slate-500'} onClick={locate}>{f.pos?'📍 Perbarui lokasi ✓':'📍 Pakai lokasi saya'}</B>{f.pos&&<a className="text-xs text-sky-700 underline" target="_blank" rel="noopener noreferrer" href={`https://www.google.com/maps?q=${f.pos.lat},${f.pos.lng}`}>Lihat di peta</a>}</div>
+  {gps&&<div className="text-xs text-slate-500">{gps}</div>}
+  <div className="text-xs text-slate-500">Jemput</div><div className="grid grid-cols-2 gap-2"><I type="date" value={f.pd} onChange={e=>set('pd',e.target.value)}/><I type="time" value={f.pt} onChange={e=>set('pt',e.target.value)}/></div>
+  <div className="text-xs text-slate-500">Antar</div><div className="grid grid-cols-2 gap-2"><I type="date" value={f.dd} onChange={e=>set('dd',e.target.value)}/><I type="time" value={f.dt} onChange={e=>set('dt',e.target.value)}/></div>
+  <Sel o={codOk?['Transfer Bank','QRIS','COD']:['Transfer Bank','QRIS']} value={f.pay} onChange={e=>set('pay',e.target.value)}/>
+  {!codOk&&<div className="text-xs text-slate-500">ℹ️ Bayar tunai (COD) tersedia setelah {codMin} pesanan Anda selesai{codBlocked?' (dinonaktifkan untuk akun ini)':''}. Untuk pesanan pertama gunakan QRIS atau Transfer Bank.</div>}
+  {(c.strikes||0)>=+(st.order_strike_limit||4)&&<div className="text-xs text-red-600">Akun Anda dibatasi karena pesanan sebelumnya tidak ditemui/dibatalkan. Hubungi laundry.</div>}
+  {isKg&&f.pay!=='COD'&&<div className="bg-slate-50 rounded-lg p-3 text-xs">💳 Pembayaran {f.pay} dilakukan <b>setelah cucian ditimbang</b>. Petunjuk bayar dan tombol unggah bukti akan muncul di "Pesanan Saya".</div>}
+  {!isKg&&f.pay!=='COD'&&<div className="bg-slate-50 rounded-lg p-3 text-sm space-y-2">
+   {f.pay==='QRIS'?(st.qris_url?<div><div className="text-xs">Scan QRIS dan bayar sesuai total</div><img src={st.qris_url} className="w-44 mx-auto rounded border"/></div>:<div className="text-xs text-red-600">QRIS belum diunggah outlet.</div>):<div>Transfer ke <b>{st.rekening||'(rekening belum diisi outlet)'}</b></div>}
+   <label className="block text-xs">Unggah bukti pembayaran (wajib)<input type="file" accept="image/*" onChange={e=>e.target.files[0]&&shrink(e.target.files[0],i=>set('proof',i),600)}/></label>{f.proof&&<img src={f.proof} className="h-20 rounded"/>}</div>}
+  <I placeholder="Kupon" value={f.cp} onChange={e=>set('cp',e.target.value)}/>{f.cp&&<div className="text-xs">{cp?`Kupon valid: ${cp.percent}%`:'Kupon tidak valid'}</div>}
+  <label className="text-sm flex gap-2"><input type="checkbox" disabled={c.points<100} checked={f.redeem} onChange={e=>set('redeem',e.target.checked)}/>Tukar 100 poin = -Rp10.000 (poin Anda {c.points})</label>
+  <textarea className="border rounded-lg px-2 py-2 md:py-1.5 text-sm w-full" rows="2" maxLength={500} placeholder="Catatan khusus untuk laundry (opsional), mis. pakaian putih dipisah" value={f.note} onChange={e=>set('note',e.target.value)}/>
+  <div className="border-t pt-2 text-sm">{isKg?<>Biaya cucian: <b>ditentukan setelah ditimbang</b><div className="text-xs text-slate-400">Ongkos antar-jemput {rp(5000)} (gratis untuk langganan aktif). Total akhir dihitung server dan dikirim lewat chat.</div></>:<>Estimasi total <b className="text-lg">{rp(total)}</b><div className="text-xs text-slate-400">Harga final dihitung server (langganan aktif: -15% & gratis antar). Bila kasir mengoreksi jumlah, harga menyesuaikan.</div></>}</div>
+  <B className="w-full" disabled={busy} onClick={submit}>{busy?'Memproses…':'Pesan Sekarang'}</B></div></Card>
+ <Card t="Pesanan Saya"><UnBanner view="customer"/>{mine.length?mine.map(x=><Pesanan key={x.id} x={x} st={st} u={u} load={load}/>):<div className="text-sm text-slate-400">Belum ada pesanan.</div>}</Card></div>}
+
+function Task({o,kind,u,load}){const [ph,setPh]=useState(null),[sg,setSg]=useState(null),[b,setB]=useState(false),[chat,setChat]=useState(false),{un}=useContext(UnCtx);
+ const noshow=safe(async()=>{if(!ph)throw Error('Ambil foto lokasi/rumah dulu sebagai bukti (kolom Foto pakaian)');const c=prompt('Alasan (ketik angka):\n1 = Pelanggan tidak ditemui\n2 = Alamat tidak ditemukan\n3 = Pelanggan membatalkan di lokasi','1');if(!c)return;
+  const why={1:'Pelanggan tidak ditemui di lokasi',2:'Alamat tidak ditemukan',3:'Pelanggan membatalkan di lokasi'}[c.trim()];if(!why)throw Error('Pilihan tidak valid');if(!confirm('Laporkan '+o.id+': '+why+'? Pesanan dibatalkan dan tercatat pada akun pelanggan.'))return;
+  setB(true);try{const url=await put(ph,`pickup/${o.id}/noshow-${Date.now()}.jpg`);const r=await sb.rpc('report_no_show',{oid:o.id,reason:why,photo:url});if(r.error)throw r.error;load()}finally{setB(false)}});
+ const done=safe(async()=>{setB(true);try{const p=`${kind}/${o.id}/${Date.now()}`,patch=kind==='pickup'?{status:'Dijemput',driver_id:u.id,pickup_photo_url:await put(ph,p+'.jpg')}:
+  {status:'Diterima',driver_id:u.id,delivery_photo_url:await put(ph,p+'.jpg'),delivery_sig_url:await put(sg,p+'-ttd.jpg'),...(o.pay_method==='COD'?{pay_status:'lunas'}:{})};
+  const r=await sb.from('orders').update(patch).eq('id',o.id);if(r.error)throw r.error;load()}finally{setB(false)}});
+ return <Card><div className="flex justify-between"><b>{kind==='pickup'?'📦 Jemput':'🚚 Antar'} {o.id}</b>{o.d!=null&&<span className="text-xs">{o.d.toFixed(1)} km</span>}</div>
+  <div className="text-sm">{o.customers.name} · {o.addresses&&o.addresses.address}<br/>{new Date(kind==='pickup'?o.pickup_at:o.delivery_at).toLocaleString('id-ID')}{o.pay_method==='COD'&&kind==='delivery'?` · Tagih ${rp(o.total)}`:''}</div>
+  {o.addresses&&o.addresses.lat!=null&&<a className="text-xs text-sky-700 underline" target="_blank" rel="noopener noreferrer" href={`https://www.google.com/maps/dir/?api=1&destination=${o.addresses.lat},${o.addresses.lng}`}>🧭 Buka navigasi</a>}
+  {kind==='delivery'&&o.pay_method!=='COD'&&o.pay_status!=='lunas'&&<div className="text-xs text-red-600 mt-1">⚠️ Pembayaran belum lunas. Pastikan pelanggan sudah membayar atau hubungi kasir.</div>}
+  {kind==='pickup'&&o.services.unit==='kg'&&<div className="text-xs text-slate-500 mt-1">Cucian kiloan ditimbang kasir di outlet, tidak perlu ditimbang di lokasi.</div>}
+  <label className="block text-xs mt-2">Foto pakaian<input type="file" accept="image/*" capture="environment" onChange={e=>e.target.files[0]&&shrink(e.target.files[0],setPh,600)}/></label>{ph&&<img src={ph} className="h-16 mt-1 rounded"/>}
+  {kind==='delivery'&&<><div className="text-xs mt-2">Tanda tangan pelanggan</div><Sig onSave={setSg}/></>}
+  <div className="mt-2 flex gap-2 flex-wrap"><B disabled={b||!ph||(kind==='delivery'&&!sg)} onClick={done}>{b?'Mengunggah…':'Konfirmasi'}</B>
+   <B c="bg-teal-600" onClick={()=>setChat(true)}>💬 Chat pelanggan<Bdg n={un[o.id+'|driver|driver']}/></B>
+   {kind==='pickup'&&<B c="bg-red-600" disabled={b} onClick={noshow}>Pelanggan tidak ditemui</B>}</div>
+  {chat&&<Chat o={o} u={u} ch="driver" view="driver" close={()=>setChat(false)}/>}</Card>}
+function Driver({u,st}){const [o,load]=useOrders(),[pos,setPos]=useState(null),[rad,setR]=useState(10);
+ useEffect(()=>{const w=navigator.geolocation.watchPosition(p=>setPos({lat:p.coords.latitude,lng:p.coords.longitude}));return()=>navigator.geolocation.clearWatch(w)},[]);
+ const t=o.filter(x=>x.source==='online'&&(x.status==='Dipesan'||x.status==='Selesai')).map(x=>({...x,d:pos&&x.addresses&&x.addresses.lat!=null?km(pos,x.addresses):null})).filter(x=>x.d==null||x.d<=rad).sort((a,b)=>(a.d??999)-(b.d??999));
+ const kom=o.filter(x=>x.driver_id===u.id&&x.status==='Diterima').length*(+(st.commission_per_order||3000));
+ return <div className="space-y-3"><UnBanner view="driver"/><Absen u={u}/><Card><div className="text-sm">Radius {rad} km{pos?'':' (lokasi belum aktif)'}<input type="range" min="1" max="30" value={rad} onChange={e=>setR(+e.target.value)} className="w-full"/>🔔 {t.length} tugas · Komisi Anda <b>{rp(kom)}</b></div></Card>
+  {t.map(x=><Task key={x.id+x.status} o={x} kind={x.status==='Dipesan'?'pickup':'delivery'} u={u} load={load}/>)}</div>}
+
+function Nota({o,st,close}){const ref=useRef();const name=st.biz_name||CFG.name||'LaundryKu',dt=new Date(o.created_at||Date.now()),paid=o.pay_status==='lunas';
+ const row=(k,v,b)=><div className="flex justify-between gap-3 py-0.5"><span className="text-slate-500">{k}</span><span className={'text-right '+(b?'font-bold':'font-medium')}>{v}</span></div>;
+ const ph=(o.customers.phone||'').replace(/\D/g,'').replace(/^0/,'62');
+ const wa=`*${name}*\n━━━━━━━━━━━━\n${paid?'✅ *Pembayaran Berhasil*':'🧾 *Nota Pesanan*'}\nNo. Nota: ${o.id}\nWaktu: ${dt.toLocaleString('id-ID')}\nPelanggan: ${o.customers.name}\n━━━━━━━━━━━━\n${o.services.name}${o.express?' (Ekspres)':''}: ${+o.qty>0?o.qty+' '+o.services.unit:'menunggu ditimbang'}\nSubtotal: ${rp(o.subtotal||o.total)}\n${o.delivery_fee?`Antar-jemput: ${rp(o.delivery_fee)}\n`:''}${o.discount?`Diskon: -${rp(o.discount)}\n`:''}*Total: ${rp(o.total)}*\n${o.est_done_at?`Estimasi selesai: ${fd(o.est_done_at)}\n`:''}Metode: ${o.pay_method} (${paid?'Lunas':'Belum lunas'})\n${o.weigh_photo_url?`Foto timbangan: ${o.weigh_photo_url}\n`:''}━━━━━━━━━━━━\n${st.biz_footer||'Terima kasih telah mempercayakan cucian Anda kepada kami.'}${st.biz_phone?'\nKontak: '+st.biz_phone:''}`;
+ const share=safe(async()=>{const c=await html2canvas(ref.current,{useCORS:true,scale:2,backgroundColor:'#ffffff'});const b=await new Promise(r=>c.toBlob(r,'image/png'));const f=new File([b],`nota-${o.id}.png`,{type:'image/png'});
+  if(navigator.canShare&&navigator.canShare({files:[f]}))await navigator.share({files:[f],text:`Nota ${o.id} - ${name}`});else{const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=f.name;a.click();alert('Gambar nota diunduh. Kirim manual lewat WhatsApp.')}});
+ return <div className="fixed inset-0 bg-black/60 overflow-auto z-50 p-4 flex justify-center"><div className="w-80 my-auto">
+  <div ref={ref} className="bg-white rounded-xl p-5 pa text-sm">
+   <div className="flex items-center gap-3">{st.biz_logo&&<img src={st.biz_logo} crossOrigin="anonymous" className="h-12 w-12 rounded-lg object-contain"/>}<div><div className="font-bold text-base leading-tight">{name}</div><div className="text-[11px] text-slate-500">{st.biz_address}{st.biz_phone?' · '+st.biz_phone:''}</div></div></div>
+   <div className="text-center my-4"><div className={'mx-auto h-12 w-12 rounded-full flex items-center justify-center text-white text-2xl '+(paid?'bg-green-500':'bg-amber-500')}>{paid?'✓':'…'}</div><div className="font-bold mt-2">{paid?'Pembayaran Berhasil':'Menunggu Pembayaran'}</div></div>
+   <div className="border rounded-lg p-3 text-xs mb-3"><div className="font-semibold text-sm mb-1">{o.services.name}{o.express?' · Ekspres':''}</div>
+    {row('No. Nota',o.id,1)}{row('Waktu',dt.toLocaleString('id-ID'))}{row('Pelanggan',o.customers.name)}{row('Berat/Jumlah',+o.qty>0?o.qty+' '+o.services.unit:'Menunggu ditimbang',1)}
+    {o.qty_estimate!=null&&row('Estimasi awal',o.qty_estimate+' '+o.services.unit)}{o.pickup_at&&row('Jemput',new Date(o.pickup_at).toLocaleString('id-ID'))}{o.delivery_at&&row('Antar',new Date(o.delivery_at).toLocaleString('id-ID'))}{o.est_done_at&&row('Estimasi selesai',fd(o.est_done_at))}</div>
+   <div className="font-semibold mb-1">Rincian Pembayaran</div>
+   <div className="border rounded-lg p-3 text-xs">{row('Subtotal',rp(o.subtotal||o.total))}{o.delivery_fee>0&&row('Antar-jemput',rp(o.delivery_fee))}{o.discount>0&&row('Diskon','-'+rp(o.discount))}{row('Total',rp(o.total),1)}{row('Metode',o.pay_method)}{row('Status',paid?'Lunas':'Belum lunas',1)}</div>
+   <div className="flex justify-center mt-4"><QR t={o.id}/></div><div className="text-center text-[10px] text-slate-500 mt-1">Tempel QR ini di keranjang cucian</div>
+   <div className="text-center text-[11px] text-slate-500 mt-3 border-t pt-2">{st.biz_footer||'Terima kasih telah mempercayakan cucian Anda kepada kami.'}</div></div>
+  <div className="flex gap-2 mt-3 flex-wrap"><B onClick={()=>window.print()}>Cetak</B><B c="bg-indigo-600" onClick={share}>Bagikan Gambar</B>
+   <a className="bg-green-600 text-white rounded-lg px-3 py-1.5 text-sm font-medium" target="_blank" rel="noopener noreferrer" href={`https://wa.me/${ph}?text=${encodeURIComponent(wa)}`}>WhatsApp (teks)</a><B c="bg-slate-500" onClick={close}>Tutup</B></div></div></div>}
+function Undangan(){const [rl,setRl]=useState('kasir'),[l,setL]=useState([]);
+ const ld=()=>sb.from('staff_invites').select('*').order('created_at',{ascending:false}).limit(20).then(r=>r.data&&setL(r.data));useEffect(()=>{ld()},[]);
+ const mk=safe(async()=>{const r=await sb.from('staff_invites').insert({role:rl});if(r.error)throw r.error;ld()});
+ return <Card t="Undangan Karyawan" c="md:col-span-2"><div className="text-xs text-slate-500 mb-2">Buat kode lalu berikan ke karyawan. Mereka memilih "Pelanggan baru? Daftar" dan mengisi kode ini. Kode sekali pakai, berlaku 7 hari.</div>
+  <div className="flex gap-2"><Sel o={['kasir','driver','karyawan']} value={rl} onChange={e=>setRl(e.target.value)}/><B onClick={mk}>Buat Kode</B></div>
+  {l.map(x=><div key={x.code} className="flex justify-between text-sm py-1 border-b"><span className="font-mono font-bold">{x.code}</span><span>{x.role} · {x.used?'terpakai':new Date(x.expires_at)<new Date()?'kedaluwarsa':'aktif'}</span></div>)}</Card>}
+function ProfilNota({st,reload}){const K=['biz_name','nota_prefix','biz_address','biz_phone','biz_footer'],L={biz_name:'Nama usaha',nota_prefix:'Awalan nomor nota (mis. LaundryQu → LaundryQu0000001)',biz_address:'Alamat',biz_phone:'No. telepon/WA outlet',biz_footer:'Pesan penutup nota'};
+ const [p,setP]=useState(()=>Object.fromEntries(K.map(k=>[k,st[k]||''])));
+ const save=safe(async()=>{const r=await sb.from('settings').upsert(K.map(k=>({key:k,value:p[k]})));if(r.error)throw r.error;reload();alert('Profil nota tersimpan')});
+ const logo=safe(async i=>{const u=await put(i,'logo/logo.jpg');const r=await sb.from('settings').upsert({key:'biz_logo',value:u});if(r.error)throw r.error;reload()});
+ return <Card t="Profil & Tampilan Nota" c="md:col-span-2"><div className="grid md:grid-cols-2 gap-2">{K.map(k=><label key={k} className="text-xs">{L[k]}<I value={p[k]} onChange={e=>setP({...p,[k]:e.target.value})}/></label>)}</div>
+  <label className="block text-xs mt-2">Logo usaha<input type="file" accept="image/*" onChange={e=>e.target.files[0]&&shrink(e.target.files[0],logo,300)}/></label>{st.biz_logo&&<img src={st.biz_logo} className="h-14 mt-1 rounded"/>}
+  <B className="mt-2" onClick={save}>Simpan</B></Card>}
+function Timbang({x,sv,load,close,done}){const [v,setV]=useState(+x.qty>0?x.qty:''),[ph,setPh]=useState(null),[b,setB]=useState(false);
+ const s=sv.find(z=>z.id===x.service_id),n=parseFloat(String(v).replace(',','.'));
+ const isKg=x.services.unit==='kg',ok=safe(async()=>{if(!(n>0)||!ph)throw Error(isKg?'Isi berat dan foto layar timbangan':'Isi jumlah dan foto cucian');if(x.services.unit==='pcs'&&!Number.isInteger(n))throw Error('Jumlah satuan harus bilangan bulat');setB(true);
+  try{const r=await sb.from('orders').update({qty:n,weigh_photo_url:await put(ph,`timbang/${x.id}/${Date.now()}.jpg`)}).eq('id',x.id).select('*,customers(name,phone),services(name,unit)').single();if(r.error)throw r.error;load();done(r.data)}finally{setB(false)}});
+ return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white p-4 rounded-xl w-80 space-y-2"><b>{isKg?'Timbang':'Ubah jumlah'} {x.id}</b>
+  <div className="text-xs text-slate-500">{x.customers.name} · Berat tercatat: {+x.qty>0?x.qty+' '+x.services.unit:'belum ditimbang'}</div>
+  <I type="number" step={x.services.unit==='pcs'?1:0.1} min={x.services.unit==='pcs'?1:0.1} placeholder={(isKg?'Berat':'Jumlah')+' ('+x.services.unit+')'} value={v} onChange={e=>setV(e.target.value)}/>
+  {s&&n>0&&<div className="text-xs bg-sky-50 rounded p-2">Perkiraan subtotal layanan: <b>{rp(calc(s,n,x.express))}</b> (rincian final dihitung otomatis setelah disimpan)</div>}
+  <label className="block text-xs">{isKg?'Foto layar timbangan (wajib, angka harus terbaca)':'Foto cucian sebagai bukti jumlah (wajib)'}<input type="file" accept="image/*" capture="environment" onChange={e=>e.target.files[0]&&shrink(e.target.files[0],setPh,800)}/></label>{ph&&<img src={ph} className="h-24 rounded"/>}
+  <div className="flex gap-2"><B disabled={b} onClick={ok}>{b?'Menyimpan…':'Simpan & Lihat Nota'}</B><B c="bg-slate-500" onClick={close}>Batal</B></div></div></div>}
+function Estimasi({x,u,load,close}){const [n,setN]=useState(x.express?6:2),[un,setUn]=useState(x.express?'jam':'hari'),[b,setB]=useState(false);
+ const ok=safe(async()=>{const v=parseFloat(String(n).replace(',','.'));if(!(v>0))throw Error('Isi angka lebih dari 0');setB(true);
+  try{const d=new Date(Date.now()+v*(un==='jam'?36e5:864e5)),r=await sb.from('orders').update({est_done_at:d.toISOString()}).eq('id',x.id);if(r.error)throw r.error;
+   await sb.from('order_messages').insert({order_id:x.id,sender_id:u.id,body:`Estimasi selesai cucian ${x.id} diperbarui: ${fd(d)} (menyesuaikan antrean).`});load();close()}finally{setB(false)}});
+ return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white p-4 rounded-xl w-72 space-y-2"><b>Estimasi selesai {x.id}</b>
+  <div className="text-xs text-slate-500">Dihitung dari sekarang. Pelanggan diberi tahu lewat chat.</div>
+  <div className="grid grid-cols-2 gap-2"><I type="number" min="0.5" step="0.5" value={n} onChange={e=>setN(e.target.value)}/><Sel o={['jam','hari']} value={un} onChange={e=>setUn(e.target.value)}/></div>
+  <div className="flex gap-2"><B disabled={b} onClick={ok}>{b?'Menyimpan…':'Simpan'}</B><B c="bg-slate-500" onClick={close}>Batal</B></div></div></div>}
+function Kasir({sv,st,u,reload}){const [o,load]=useOrders(),lm=useLastMsg(),{un:uc}=useContext(UnCtx),[tm,setTm]=useState(null),[es,setEs]=useState(null),[chat,setChat]=useState(null),[nota,setNota]=useState(null),[f,sf]=useState({name:'',phone:'',svc:'',qty:2,ex:false});
+ const upd=safe(async(id,p)=>{const r=await sb.from('orders').update(p).eq('id',id);if(r.error)throw r.error;load()});
+ useEffect(()=>{const used=n=>o.filter(x=>x.status==='Dicuci'&&x.washer===n).reduce((a,x)=>a+wl(x),0);
+  const q=o.filter(x=>x.status==='Antrean').sort((a,b)=>a.created_at<b.created_at?-1:1);
+  for(const x of q){const m=WASH.map(w=>({w,free:w.cap-used(w.n)})).filter(e=>e.free>=wl(x)).sort((a,b)=>b.free-a.free)[0];if(m){upd(x.id,{status:'Dicuci',washer:m.w.n});break}}},[o]);
+ const s0=sv.find(x=>x.id==f.svc)||sv[0];
+ const add=safe(async()=>{if(!f.name||!f.phone)throw Error('Isi nama & WA');if(s0.unit==='kg'&&!f.ph)throw Error('Foto timbangan wajib');const wu=f.ph?await put(f.ph,`timbang/walkin/${Date.now()}.jpg`):null;let c=(await sb.from('customers').select('*').eq('phone',f.phone).maybeSingle()).data;
+  if(!c){const r=await sb.from('customers').insert({name:f.name,phone:f.phone}).select().single();if(r.error)throw r.error;c=r.data}
+  const t=calc(s0,f.qty,f.ex),r=await sb.from('orders').insert({customer_id:c.id,service_id:s0.id,qty:+f.qty,express:f.ex,subtotal:t,total:t,pay_method:'Tunai',pay_status:'lunas',status:'Antrean',source:'walkin',weigh_photo_url:wu}).select('*,customers(name,phone),services(name,unit)').single();
+  if(r.error)throw r.error;setNota(r.data);load()});
+ const cancel=safe(async x=>{if(!confirm('Batalkan pesanan '+x.id+'?'))return;const sk=confirm('Catat sebagai PELANGGARAN pelanggan (mis. tidak ada di lokasi / tidak bisa dihubungi)?\nOK = catat pelanggaran, Batal = tanpa sanksi');
+  const r=await sb.from('orders').update({status:'Batal'}).eq('id',x.id);if(r.error)throw r.error;if(sk){const c=await sb.from('customers').update({strikes:(x.customers.strikes||0)+1}).eq('id',x.customer_id);if(c.error)throw c.error}load()});
+ const nx={Dijemput:['Terima → Antrean','Antrean'],Dicuci:['Selesai Cuci','Selesai'],Selesai:['Serahkan','Diterima']};
+ const adv=x=>{const n=nx[x.status];if(!n)return;const p={status:n[1]};if(x.status==='Dicuci')p.washer=null;
+  if(x.status==='Selesai'&&x.pay_status!=='lunas'){if(x.pay_method!=='COD'&&!confirm('Pembayaran '+x.id+' belum tercatat lunas. Tandai LUNAS dan serahkan ke pelanggan?'))return;p.pay_status='lunas'}
+  upd(x.id,p)};
+ return <div className="grid md:grid-cols-3 gap-4"><div className="md:col-span-3 empty:hidden"><StokBanner/><UnBanner view="kasir"/></div><div className="space-y-4"><Absen u={u}/><Card t="POS Walk-in"><div className="space-y-2">
+  <I placeholder="Nama" value={f.name} onChange={e=>sf({...f,name:e.target.value})}/><I placeholder="No. WA (08...)" value={f.phone} onChange={e=>sf({...f,phone:e.target.value})}/>
+  <Sel o={sv.map(x=>[x.id,x.name])} value={s0&&s0.id} onChange={e=>sf({...f,svc:e.target.value})}/><I type="number" min="0.1" step="0.1" value={f.qty} onChange={e=>sf({...f,qty:e.target.value})}/>{s0&&s0.unit==='kg'&&<label className="block text-xs">Foto layar timbangan (wajib)<input type="file" accept="image/*" capture="environment" onChange={e=>e.target.files[0]&&shrink(e.target.files[0],i=>sf(z=>({...z,ph:i})),800)}/></label>}
+  <label className="text-sm flex gap-2"><input type="checkbox" onChange={e=>sf({...f,ex:e.target.checked})}/>Ekspres</label><B className="w-full" onClick={add}>Simpan & Cetak Nota + QR</B></div>
+  <div className="mt-4 text-sm font-semibold">Kapasitas Washer</div>{WASH.map(w=>{const us=o.filter(x=>x.status==='Dicuci'&&x.washer===w.n).reduce((a,x)=>a+wl(x),0);return <div key={w.n} className="text-xs mt-1">{w.n}: {us}/{w.cap}<div className="h-2 bg-slate-200 rounded"><div className="h-2 rounded bg-emerald-500" style={{width:us/w.cap*100+'%'}}/></div></div>})}</Card>
+  <EstStandar key={[st.regular_days,st.express_hours].join('|')} st={st} reload={reload}/><Inventaris/></div>
+  <Card t="Antrean & Proses" c="md:col-span-2">{o.map(x=>{const wait=x.services.unit==='kg'&&+x.qty===0,un=lm[x.id]&&lm[x.id].sender_role==='customer';
+   return <div key={x.id} className="border-b py-2 text-sm"><div className="flex items-center gap-2 flex-wrap"><b>{x.id}</b><span>{x.customers.name} · {wait?'⚖️ belum ditimbang':x.qty+x.services.unit+' · '+rp(x.total)}</span><Badge s={x.status+(x.washer&&x.status==='Dicuci'?' · '+x.washer:'')}/>{x.est_done_at&&x.status!=='Diterima'&&<span className="text-[10px] text-slate-500">⏱ {fd(x.est_done_at)}</span>}</div>
+   <span className="flex gap-1 items-center flex-wrap mt-1 justify-end">{x.payment_proof_url&&<a href={okUrl(x.payment_proof_url)} target="_blank" rel="noopener noreferrer"><img src={x.payment_proof_url} className="h-8 rounded"/></a>}
+   {x.pay_status==='menunggu_verifikasi'&&<B c="bg-emerald-600" onClick={()=>upd(x.id,{pay_status:'lunas'})}>Verifikasi Bayar</B>}
+   {x.pay_status==='belum_bayar'&&!wait&&<B c="bg-emerald-700" onClick={()=>confirm('Tandai '+x.id+' LUNAS? (pembayaran sudah diterima)')&&upd(x.id,{pay_status:'lunas'})}>Tandai Lunas</B>}
+   {x.pay_status==='lunas'&&<Badge s="Lunas"/>}
+   {nx[x.status]&&!(x.status==='Selesai'&&x.source==='online')&&<B disabled={wait&&x.status==='Dijemput'} onClick={()=>adv(x)}>{wait&&x.status==='Dijemput'?'Timbang dulu':nx[x.status][0]}</B>}
+   {!['Diterima','Batal'].includes(x.status)&&<B c={wait?'bg-red-600':'bg-amber-600'} onClick={()=>setTm(x)}>{x.services.unit==='kg'?'Timbang':'Ubah jumlah'}</B>}
+   {['Dipesan','Dijemput'].includes(x.status)&&<B c="bg-red-700" onClick={()=>cancel(x)}>Batalkan</B>}
+   {!['Diterima','Batal'].includes(x.status)&&<B c="bg-indigo-600" onClick={()=>setEs(x)}>Estimasi</B>}
+   <B c="bg-slate-700" onClick={()=>setChat(x)}>💬<Bdg n={uc[x.id+'|kasir|kasir']}/>{un&&!(uc[x.id+'|kasir|kasir']>0)?' Belum dibalas':''}</B>
+   <B c="bg-slate-600" onClick={()=>setNota(x)}>Nota/QR</B></span></div>})}</Card>
+  {nota&&<Nota o={nota} st={st} close={()=>setNota(null)}/>}{tm&&<Timbang x={tm} sv={sv} load={load} close={()=>setTm(null)} done={r=>{setTm(null);setNota(r)}}/>}{es&&<Estimasi x={es} u={u} load={load} close={()=>setEs(null)}/>}{chat&&<Chat o={chat} u={u} ch="kasir" view="kasir" close={()=>setChat(null)}/>}</div>}
+
+function FaceCam({title,onDone,close}){const v=useRef(),[msg,setMsg]=useState('Menyiapkan kamera dan modul wajah…'),[ready,setReady]=useState(false),[b,setB]=useState(false);
+ useEffect(()=>{let s=null,off=false;(async()=>{try{await loadFace();s=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:640}},audio:false});if(off){s.getTracks().forEach(z=>z.stop());return}
+  v.current.srcObject=s;await v.current.play();setReady(true);setMsg('Hadapkan wajah ke kamera dengan cahaya cukup, lalu tekan Ambil Foto.')}catch(e){setMsg(e.name==='NotAllowedError'?'Izin kamera ditolak. Aktifkan izin Kamera untuk situs ini lalu coba lagi.':(e.message||'Kamera tidak tersedia'))}})();
+  return()=>{off=true;s&&s.getTracks().forEach(z=>z.stop())}},[]);
+ const snap=async()=>{setB(true);try{const d=await faceapi.detectSingleFace(v.current,new faceapi.TinyFaceDetectorOptions({inputSize:320,scoreThreshold:.5})).withFaceLandmarks(true).withFaceDescriptor();
+  if(!d){setMsg('Wajah tidak terdeteksi. Pastikan wajah terlihat jelas dan cukup cahaya.');return}
+  const c=document.createElement('canvas'),w=480;c.width=w;c.height=v.current.videoHeight*w/v.current.videoWidth;c.getContext('2d').drawImage(v.current,0,0,c.width,c.height);
+  await onDone({desc:Array.from(d.descriptor),img:c.toDataURL('image/jpeg',.7)})}catch(e){setMsg(e.message||'Gagal memproses')}finally{setB(false)}};
+ return <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-xl p-4 w-full max-w-sm space-y-2"><b>{title}</b>
+  <video ref={v} playsInline muted className="w-full rounded bg-black" style={{transform:'scaleX(-1)'}}/>
+  <div className="text-xs text-slate-600">{msg}</div>
+  <div className="flex gap-2"><B disabled={!ready||b} onClick={snap}>{b?'Memproses…':'Ambil Foto'}</B><B c="bg-slate-500" onClick={close}>Batal</B></div></div></div>}
+function Absen({u}){const [tpl,setTpl]=useState(undefined),[l,setL]=useState([]),[cam,setCam]=useState(null);
+ const ld=()=>{sb.from('face_templates').select('descriptor').eq('user_id',u.id).maybeSingle().then(r=>setTpl(r.data?r.data.descriptor:null));sb.from('attendance').select('*').eq('user_id',u.id).order('at',{ascending:false}).limit(6).then(r=>r.data&&setL(r.data))};
+ useEffect(()=>{ld()},[]);
+ const last=l[0]&&wibDate(l[0].at)===wibDate()?l[0].kind:null;
+ const done=safe(async({desc,img})=>{
+  if(cam==='daftar'){const r=await sb.from('face_templates').insert({descriptor:desc});if(r.error)throw r.error;setCam(null);ld();alert('Wajah berhasil didaftarkan. Sekarang Anda bisa absen.');return}
+  const dist=fdist(desc,tpl);if(dist>=0.5)throw Error('Wajah tidak cocok dengan data terdaftar (skor '+dist.toFixed(2)+'). Coba lagi dengan cahaya lebih baik.');
+  const pos=await getPos(),photo=await put(img,`absen/${u.id}/${Date.now()}.jpg`);
+  const r=await sb.from('attendance').insert({kind:cam,lat:pos.latitude,lng:pos.longitude,face_ok:true,face_score:+dist.toFixed(3),photo_url:photo});if(r.error)throw r.error;
+  setCam(null);ld();alert(cam==='masuk'?'Absen masuk tercatat. Selamat bekerja!':'Absen pulang tercatat. Terima kasih!')});
+ const onDone=async x=>{try{await done(x)}catch(e){throw e}};
+ return <Card t="Absensi (wajah + lokasi)">{tpl===undefined?<div className="text-sm">Memuat…</div>:tpl===null?<div className="space-y-2 text-sm"><div>Wajah Anda belum terdaftar. Daftarkan sekali untuk bisa absen. Bila perlu direset, hubungi Owner.</div><B onClick={()=>setCam('daftar')}>Daftarkan Wajah</B></div>:
+  <div className="flex gap-2 flex-wrap"><B c="bg-emerald-600" disabled={last==='masuk'} onClick={()=>setCam('masuk')}>Absen Masuk</B><B c="bg-orange-600" disabled={last!=='masuk'} onClick={()=>setCam('pulang')}>Absen Pulang</B></div>}
+  <div className="text-xs text-slate-500 mt-2">Absen hanya bisa dilakukan di area outlet.</div>
+  {l.map(x=><div key={x.id} className="text-xs flex items-center gap-2 mt-1">{x.photo_url&&<img src={x.photo_url} className="h-8 w-8 rounded object-cover"/>}<span className="font-semibold">{x.kind}</span><span>{new Date(x.at).toLocaleString('id-ID',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</span>{x.distance_m!=null&&<span className="text-slate-400">{x.distance_m} m</span>}</div>)}
+  {cam&&<FaceCam title={cam==='daftar'?'Daftarkan wajah':'Verifikasi wajah — '+cam} onDone={async x=>{await done(x)}} close={()=>setCam(null)}/>}</Card>}
+function StokBanner(){const [l,setL]=useState([]);
+ useEffect(()=>{const ld=()=>sb.from('inventory').select('name,qty,unit,min_qty').then(r=>r.data&&setL(r.data.filter(x=>+x.qty<=+x.min_qty)));ld();const i=setInterval(ld,30000);return()=>clearInterval(i)},[]);
+ return l.length?<div className="bg-red-100 text-red-700 rounded-xl p-3 text-sm md:col-span-3">⚠️ Stok menipis: {l.map(x=>`${x.name} (${+x.qty} ${x.unit})`).join(', ')}</div>:null}
+function Inventaris({admin}){const [l,setL]=useState([]),[a,setA]=useState({}),[n,setN]=useState({name:'',unit:'pcs',qty:'',min:''});
+ const ld=()=>sb.from('inventory').select('*').order('name').then(r=>r.data&&setL(r.data));useEffect(()=>{ld()},[]);
+ const adj=safe(async(it,sg)=>{const v=parseFloat(String(a[it.id]||'').replace(',','.'));if(!(v>0))throw Error('Isi jumlah lebih dari 0');const r=await sb.rpc('adjust_stock',{item:it.id,delta:sg*v,why:sg>0?'Tambah stok':'Dipakai'});if(r.error)throw r.error;setA({...a,[it.id]:''});ld()});
+ const add=safe(async()=>{if(!n.name.trim())throw Error('Isi nama barang');const r=await sb.from('inventory').insert({name:n.name.trim(),unit:n.unit,qty:+n.qty||0,min_qty:+n.min||0});if(r.error)throw r.error;setN({name:'',unit:'pcs',qty:'',min:''});ld()});
+ const del=safe(async it=>{if(!confirm('Hapus '+it.name+'?'))return;const r=await sb.from('inventory').delete().eq('id',it.id);if(r.error)throw r.error;ld()});
+ const mn=safe(async it=>{const v=prompt('Batas minimum stok untuk '+it.name+' ('+it.unit+'):',it.min_qty);if(v===null)return;const x=parseFloat(String(v).replace(',','.'));if(!(x>=0))throw Error('Angka tidak valid');const r=await sb.from('inventory').update({min_qty:x}).eq('id',it.id);if(r.error)throw r.error;ld()});
+ return <Card t="Inventaris" c={admin?'md:col-span-2':''}><div className="text-xs text-slate-500 mb-2">Peringatan otomatis muncul bila stok mencapai batas minimum.</div>
+  {l.map(it=>{const low=+it.qty<=+it.min_qty;return <div key={it.id} className="flex items-center gap-2 flex-wrap py-1 border-b text-sm"><span className={'flex-1 min-w-[8rem] '+(low?'text-red-600 font-semibold':'')}>{it.name}: {+it.qty} {it.unit} <span className="text-xs text-slate-400">(min {+it.min_qty})</span></span>
+   <input type="number" min="0" step="any" placeholder="jml" className="border rounded px-1 py-1 text-xs w-16" value={a[it.id]||''} onChange={e=>setA({...a,[it.id]:e.target.value})}/>
+   <B c="bg-orange-600" onClick={()=>adj(it,-1)}>Pakai</B><B c="bg-emerald-600" onClick={()=>adj(it,1)}>+ Tambah</B>{admin&&<><B c="bg-slate-500" onClick={()=>mn(it)}>Min</B><B c="bg-red-600" onClick={()=>del(it)}>×</B></>}</div>})}
+  {admin&&<div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-3"><I placeholder="Nama barang" value={n.name} onChange={e=>setN({...n,name:e.target.value})}/><Sel o={['pcs','kg','L','pack','botol']} value={n.unit} onChange={e=>setN({...n,unit:e.target.value})}/><I type="number" placeholder="Stok awal" value={n.qty} onChange={e=>setN({...n,qty:e.target.value})}/><I type="number" placeholder="Min. stok" value={n.min} onChange={e=>setN({...n,min:e.target.value})}/><B onClick={add}>Tambah Barang</B></div>}</Card>}
+function Keuangan({m,st}){const [od,setOd]=useState([]),[ex,setEx]=useState([]),[f,sf]=useState({name:'',category:'Operasional',amount:'',date:wibDate()});
+ const [s,e]=mr(m),rate=+(st.commission_per_order||3000);
+ const ld=()=>{sb.from('orders').select('total,pay_method,pay_status,created_at,driver_id,status').gte('created_at',s).lt('created_at',e).limit(5000).then(r=>r.data&&setOd(r.data));
+  sb.from('expenses').select('*').gte('spent_on',m+'-01').lt('spent_on',e.slice(0,10)).order('spent_on',{ascending:false}).then(r=>r.data&&setEx(r.data))};
+ useEffect(()=>{ld()},[m]);
+ const paid=od.filter(x=>x.pay_status==='lunas'),om=paid.reduce((a,x)=>a+ +x.total,0),bk=ex.reduce((a,x)=>a+ +x.amount,0),kom=od.filter(x=>x.status==='Diterima'&&x.driver_id).length*rate,laba=om-bk-kom;
+ const dn=new Date(+m.slice(0,4),+m.slice(5,7),0).getDate(),days=[...Array(dn)].map((_,i)=>{const d=m+'-'+String(i+1).padStart(2,'0');return{d:i+1,v:paid.filter(x=>wibDate(x.created_at)===d).reduce((a,x)=>a+ +x.total,0)}}),mx=Math.max(1,...days.map(d=>d.v));
+ const pm={};paid.forEach(x=>{pm[x.pay_method]=pm[x.pay_method]||{n:0,v:0};pm[x.pay_method].n++;pm[x.pay_method].v+= +x.total});const top=Object.entries(pm).sort((a,b)=>b[1].n-a[1].n);
+ const add=safe(async()=>{if(!f.name.trim()||!(+f.amount>0))throw Error('Isi keterangan dan nominal');const r=await sb.from('expenses').insert({name:f.name.trim(),category:f.category,amount:+f.amount,spent_on:f.date});if(r.error)throw r.error;sf({...f,name:'',amount:''});ld()});
+ const del=safe(async x=>{if(!confirm('Hapus pengeluaran "'+x.name+'"?'))return;const r=await sb.from('expenses').delete().eq('id',x.id);if(r.error)throw r.error;ld()});
+ return <Card t={'Laporan Keuangan '+m} c="md:col-span-2"><div className="grid grid-cols-2 md:grid-cols-4 gap-2">{[['Omzet (lunas)',rp(om)],['Pengeluaran',rp(bk)],['Komisi kurir',rp(kom)],['Laba bersih',rp(laba)]].map(([k,v])=><div key={k} className="bg-slate-50 rounded-lg p-2"><div className="text-[11px] text-slate-500">{k}</div><div className={'font-bold '+(k==='Laba bersih'&&laba<0?'text-red-600':'')}>{v}</div></div>)}</div>
+  <div className="text-xs text-slate-500 mt-3">Pemasukan harian</div><div className="flex items-end gap-px h-28">{days.map(d=><div key={d.d} className="flex-1 text-center text-[8px]" title={rp(d.v)}><div className="bg-sky-500 rounded-t" style={{height:d.v/mx*100+'%',minHeight:d.v?2:0}}/>{d.d}</div>)}</div>
+  <div className="text-sm mt-3">Metode bayar terpopuler: {top.length?top.map(([k,x])=>`${k} (${x.n} order, ${rp(x.v)})`).join(' · '):'-'}</div>
+  <div className="font-semibold text-sm mt-4 mb-1">Pengeluaran operasional</div>
+  <div className="grid grid-cols-2 md:grid-cols-5 gap-2"><I placeholder="Keterangan" value={f.name} onChange={ev=>sf({...f,name:ev.target.value})}/><Sel o={['Operasional','Listrik/Air','Bahan','Gaji','Sewa','Lain-lain']} value={f.category} onChange={ev=>sf({...f,category:ev.target.value})}/><I type="number" placeholder="Nominal Rp" value={f.amount} onChange={ev=>sf({...f,amount:ev.target.value})}/><I type="date" value={f.date} onChange={ev=>sf({...f,date:ev.target.value})}/><B onClick={add}>Tambah</B></div>
+  {ex.map(x=><div key={x.id} className="flex justify-between items-center text-sm py-1 border-b"><span>{x.spent_on} · {x.category} · {x.name}</span><span className="flex items-center gap-2">{rp(x.amount)}<B c="bg-red-600" onClick={()=>del(x)}>×</B></span></div>)}</Card>}
+function SDM({m,st,reload}){const [a,setA]=useState([]),[od,setOd]=useState([]),[pr,setPr]=useState([]),[fc,setFc]=useState([]),[s,e]=mr(m);
+ const [cf,setCf]=useState({rate:st.commission_per_order||'3000',lat:st.outlet_lat||'',lng:st.outlet_lng||'',rad:st.outlet_radius||'100',on:st.geofence_on!=='0'});
+ const ld=()=>{sb.from('attendance').select('*,profiles(full_name,role)').gte('at',s).lt('at',e).order('at',{ascending:false}).limit(500).then(r=>r.data&&setA(r.data));
+  sb.from('orders').select('driver_id,weighed_by,status').gte('created_at',s).lt('created_at',e).limit(5000).then(r=>r.data&&setOd(r.data));
+  sb.from('profiles').select('id,full_name,role').in('role',['kasir','driver','karyawan']).then(r=>r.data&&setPr(r.data));
+  sb.from('face_templates').select('user_id').then(r=>r.data&&setFc(r.data.map(x=>x.user_id)))};
+ useEffect(()=>{ld()},[m]);
+ const save=safe(async()=>{const r=await sb.from('settings').upsert([{key:'commission_per_order',value:String(cf.rate||0)},{key:'outlet_lat',value:String(cf.lat)},{key:'outlet_lng',value:String(cf.lng)},{key:'outlet_radius',value:String(cf.rad||100)},{key:'geofence_on',value:cf.on?'1':'0'}]);if(r.error)throw r.error;reload();alert('Pengaturan SDM tersimpan')});
+ const here=safe(async()=>{const p=await getPos();setCf(x=>({...x,lat:p.latitude.toFixed(6),lng:p.longitude.toFixed(6)}))});
+ const reset=safe(async p=>{if(!confirm('Reset data wajah '+(p.full_name||'karyawan')+'? Karyawan harus mendaftarkan wajah ulang.'))return;const r=await sb.from('face_templates').delete().eq('user_id',p.id);if(r.error)throw r.error;ld()});
+ const rate=+(st.commission_per_order||3000);
+ const rows=pr.map(p=>({p,hari:new Set(a.filter(x=>x.user_id===p.id&&x.kind==='masuk').map(x=>wibDate(x.at))).size,antar:od.filter(x=>x.driver_id===p.id&&x.status==='Diterima').length,timbang:od.filter(x=>x.weighed_by===p.id).length}));
+ return <Card t={'SDM & Absensi '+m} c="md:col-span-2">
+  <div className="grid md:grid-cols-2 gap-3"><div className="bg-slate-50 rounded-lg p-3 text-xs space-y-2"><div className="font-semibold text-sm">Pengaturan</div>
+   <label className="block">Komisi kurir per order (Rp)<I type="number" value={cf.rate} onChange={ev=>setCf({...cf,rate:ev.target.value})}/></label>
+   <div className="font-semibold pt-1">Lokasi outlet (geofence absensi)</div>
+   <div className="grid grid-cols-2 gap-2"><I placeholder="Latitude" value={cf.lat} onChange={ev=>setCf({...cf,lat:ev.target.value})}/><I placeholder="Longitude" value={cf.lng} onChange={ev=>setCf({...cf,lng:ev.target.value})}/></div>
+   <B c="bg-slate-600" onClick={here}>📍 Pakai lokasi saya sekarang</B>
+   <label className="block">Radius diizinkan (meter)<I type="number" value={cf.rad} onChange={ev=>setCf({...cf,rad:ev.target.value})}/></label>
+   <label className="flex gap-2"><input type="checkbox" checked={cf.on} onChange={ev=>setCf({...cf,on:ev.target.checked})}/>Aktifkan geofence (absen hanya di area outlet)</label>
+   {!(cf.lat&&cf.lng)&&<div className="text-red-600">Lokasi outlet belum diisi, jadi geofence belum berlaku.</div>}<B onClick={save}>Simpan</B></div>
+   <div className="text-xs"><div className="font-semibold text-sm mb-1">Kinerja bulan ini</div>{rows.length?rows.map(({p,hari,antar,timbang})=><div key={p.id} className="flex flex-wrap items-center gap-x-2 py-1 border-b"><b>{p.full_name||'-'}</b><span className="text-slate-500">{p.role}</span><span>hadir {hari} hari</span>{p.role==='driver'&&<span>· {antar} antar · komisi {rp(antar*rate)}</span>}{p.role==='kasir'&&<span>· {timbang} timbangan</span>}
+    <span className="ml-auto flex items-center gap-1">{fc.includes(p.id)?<><span className="text-green-700">wajah ✓</span><B c="bg-red-600" onClick={()=>reset(p)}>Reset</B></>:<span className="text-slate-400">wajah belum</span>}</span></div>):<div className="text-slate-400">Belum ada karyawan.</div>}</div></div>
+  <div className="font-semibold text-sm mt-4 mb-1">Riwayat absensi</div>
+  <div className="max-h-64 overflow-auto">{a.length?a.map(x=><div key={x.id} className="flex items-center gap-2 text-xs py-1 border-b">{x.photo_url&&<a href={okUrl(x.photo_url)} target="_blank" rel="noopener noreferrer"><img src={x.photo_url} className="h-9 w-9 rounded object-cover"/></a>}<b>{x.profiles&&x.profiles.full_name||'-'}</b><span>{x.kind}</span><span>{new Date(x.at).toLocaleString('id-ID',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</span><span className="text-slate-400">{x.distance_m!=null?x.distance_m+' m':''}{x.face_score!=null?' · skor '+x.face_score:''}</span></div>):<div className="text-xs text-slate-400">Belum ada absensi.</div>}</div></Card>}
+function Tarif({sv,reload}){const [e,setE]=useState({});
+ const g=(s,k)=>e[s.id]&&e[s.id][k]!==undefined?e[s.id][k]:(s[k]==null?'':s[k]);
+ const ch=(s,k,v)=>setE({...e,[s.id]:{...e[s.id],[k]:v}});
+ const save=safe(async s=>{const p=e[s.id];if(!p)return;const x={};for(const k in p)x[k]=p[k]===''?null:+p[k];const r=await sb.from('services').update(x).eq('id',s.id);if(r.error)throw r.error;setE({...e,[s.id]:undefined});reload();alert('Tarif tersimpan')});
+ return <Card t="Tarif Layanan" c="md:col-span-2"><div className="text-xs text-slate-500 mb-2">Contoh Kiloan: paket 3 kg = Rp12.000, tambahan Rp2.000 tiap kg berikutnya (dibulatkan ke atas). Kosongkan "Jumlah paket" & "Harga paket" bila tidak memakai paket.</div>
+ {sv.map(s=><div key={s.id} className="grid grid-cols-2 md:grid-cols-7 gap-2 items-end py-2 border-b text-xs"><b className="col-span-2 md:col-span-1">{s.name} ({s.unit})</b>
+  {[['price','Harga/satuan'],['min_qty','Jumlah paket'],['min_price','Harga paket'],['extra_price','Tambahan/satuan'],['express_multiplier','Pengali ekspres']].map(([k,l])=><label key={k}>{l}<I type="number" value={g(s,k)} onChange={ev=>ch(s,k,ev.target.value)}/></label>)}
+  <B onClick={()=>save(s)}>Simpan</B></div>)}</Card>}
+const mb=b=>(b/1048576).toFixed(1)+' MB';
+const csvOf=(rows)=>{if(!rows.length)return'';const ks=[...new Set(rows.flatMap(r=>Object.keys(r)))],e=v=>{v=v==null?'':typeof v==='object'?JSON.stringify(v):String(v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v};return '﻿'+[ks.join(','),...rows.map(r=>ks.map(k=>e(r[k])).join(','))].join('\r\n')};
+const dl=(name,text)=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'text/csv;charset=utf-8'}));a.download=name;document.body.appendChild(a);a.click();a.remove()};
+const fetchAll=async(tbl,sel)=>{let out=[],i=0;for(;;){const r=await sb.from(tbl).select(sel).range(i,i+999);if(r.error)throw r.error;out=out.concat(r.data);if(r.data.length<1000)break;i+=1000}return out};
+function Penyimpanan(){const [us,setUs]=useState(null),[mo,setMo]=useState('6'),[cnt,setCnt]=useState(null),[bk,setBk]=useState(false),[cf,setCf]=useState('');
+ const cutoff=()=>mo==='0'?new Date().toISOString():new Date(Date.now()-(+mo)*30*864e5).toISOString();
+ const load=safe(async()=>{const r=await sb.rpc('storage_usage');if(r.error)throw r.error;setUs(r.data);
+  const c=await sb.from('orders').select('id',{count:'exact',head:true}).lt('created_at',cutoff()).eq('status','Diterima').eq('pay_status','lunas');setCnt(c.count)});
+ useEffect(()=>{load()},[mo]);
+ const backup=safe(async()=>{const d=wibDate();
+  const od=(await fetchAll('orders','*,customers(name,phone),services(name,unit)')).map(({customers:c,services:v,...r})=>({...r,pelanggan:c&&c.name,telepon:c&&c.phone,layanan:v&&v.name,satuan:v&&v.unit}));
+  dl(`cadangan-pesanan-${d}.csv`,csvOf(od));
+  const ex=await fetchAll('expenses','*');if(ex.length)dl(`cadangan-pengeluaran-${d}.csv`,csvOf(ex));
+  const at=await fetchAll('attendance','*');if(at.length)dl(`cadangan-absensi-${d}.csv`,csvOf(at));
+  setBk(true);alert(`Cadangan diunduh: ${od.length} pesanan, ${ex.length} pengeluaran, ${at.length} absensi. Cek folder Download dan simpan file di Google Drive / flashdisk.`)});
+ const rmFiles=async()=>{const r=await sb.rpc('old_photo_urls',{cutoff:cutoff()});if(r.error)throw r.error;
+  const ps=[...new Set((r.data||[]).map(u=>{const i=String(u).indexOf('/object/public/files/');return i<0?null:decodeURIComponent(String(u).slice(i+21).split('?')[0])}).filter(Boolean))];
+  for(let i=0;i<ps.length;i+=100){const x=await sb.storage.from('files').remove(ps.slice(i,i+100));if(x.error)throw x.error}
+  const c=await sb.rpc('clear_old_photos',{cutoff:cutoff()});if(c.error)throw c.error;return ps.length};
+ const delPhotos=safe(async()=>{if(!bk)throw Error('Unduh cadangan dulu (tombol 1).');if(!confirm('Hapus foto timbangan, bukti bayar & foto absensi pada transaksi selesai yang lebih lama dari periode terpilih? Data transaksi tetap ada.'))return;
+  const n=await rmFiles();alert(n+' file foto dihapus.');load()});
+ const delOrders=safe(async()=>{if(!bk)throw Error('Unduh cadangan dulu (tombol 1).');if(cf!=='HAPUS')throw Error('Ketik HAPUS (huruf besar) pada kolom konfirmasi.');
+  if(!confirm(`YAKIN? ${cnt} transaksi selesai & lunas akan DIHAPUS PERMANEN dari database. Laporan keuangan periode itu tidak bisa dibuat ulang dari aplikasi (hanya dari file cadangan).`))return;
+  await rmFiles();const r=await sb.rpc('purge_old_orders',{cutoff:cutoff()});if(r.error)throw r.error;setCf('');alert(r.data+' transaksi dihapus.');load()});
+ const pf=us?us.files_bytes/1073741824:0,pd=us?us.db_bytes/524288000:0,warn=pf>0.7||pd>0.7;
+ const bar=(l,v,t)=><div className="mb-2"><div className="text-xs flex justify-between"><span>{l}</span><span>{t}</span></div><div className="h-2 bg-slate-200 rounded"><div className={'h-2 rounded '+(v>0.85?'bg-red-500':v>0.7?'bg-amber-500':'bg-emerald-500')} style={{width:Math.min(100,v*100)+'%'}}/></div></div>;
+ return <Card t="Penyimpanan & Cadangan" c="md:col-span-2">
+  {us?<>{bar('Foto & file (batas gratis ±1 GB)',pf,mb(us.files_bytes))}{bar('Database (batas gratis ±500 MB)',pd,mb(us.db_bytes))}</>:<div className="text-xs text-slate-500">Memuat… (jalankan schema-v8.sql bila gagal)</div>}
+  {warn&&<div className="text-sm bg-red-50 border border-red-300 text-red-700 rounded-lg p-2 mb-2">⚠️ Penyimpanan hampir penuh. Lakukan langkah 1 lalu 2 di bawah.</div>}
+  <div className="text-sm font-semibold mt-2">1. Unduh cadangan semua transaksi</div>
+  <div className="text-xs text-slate-500 mb-1">File CSV (bisa dibuka di Excel/Google Sheets): pesanan, pengeluaran, absensi.</div>
+  <B onClick={backup}>⬇️ Unduh Cadangan (CSV)</B>{bk&&<span className="text-xs text-emerald-700 ml-2">✓ cadangan sudah diunduh</span>}
+  <div className="text-sm font-semibold mt-4">2. Pilih data yang dibersihkan</div>
+  <div className="text-xs text-slate-500 mb-1">Hanya transaksi berstatus <b>Diterima + Lunas</b>. Pesanan yang masih berjalan tidak pernah dihapus. Poin pelanggan tetap aman.</div>
+  <select className="border rounded-lg px-2 py-1.5 text-sm" value={mo} onChange={e=>setMo(e.target.value)}><option value="12">Lebih lama dari 12 bulan</option><option value="6">Lebih lama dari 6 bulan</option><option value="3">Lebih lama dari 3 bulan</option><option value="0">Semua yang sudah selesai (kosongkan)</option></select>
+  <span className="text-xs ml-2">{cnt==null?'':cnt+' transaksi memenuhi syarat'}</span>
+  <div className="mt-2 flex flex-wrap gap-2 items-center"><B c="bg-amber-600" onClick={delPhotos}>🧹 Hapus foto saja (disarankan dulu)</B></div>
+  <div className="mt-3 border-t pt-3"><div className="text-xs text-red-700 mb-1">Tombol darurat — menghapus transaksi permanen:</div>
+   <div className="flex gap-2"><I placeholder='Ketik HAPUS' value={cf} onChange={e=>setCf(e.target.value)}/><B c="bg-red-600" onClick={delOrders}>Hapus Transaksi</B></div></div>
+ </Card>}
+function Owner({st,reload,sv,reloadSv}){const [m,setM]=useState(ym()),[o]=useOrders(),[pr,setPr]=useState([]),[rk,setRk]=useState(st.rekening||'');
+ const lp=()=>sb.from('profiles').select('*').order('created_at',{ascending:false}).then(r=>r.data&&setPr(r.data));useEffect(()=>{lp()},[]);
+ const paid=o.filter(x=>x.pay_status==='lunas'),om=paid.reduce((a,x)=>a+x.total,0),mx0={};paid.forEach(x=>mx0[x.pay_method]=(mx0[x.pay_method]||0)+1);
+ const days=[...Array(7)].map((_,i)=>{const d=new Date(Date.now()-(6-i)*864e5).toISOString().slice(0,10);return{d:d.slice(5),v:paid.filter(x=>x.created_at.slice(0,10)===d).reduce((a,x)=>a+x.total,0)}}),mx=Math.max(1,...days.map(d=>d.v));
+ const setS=safe(async(key,value)=>{const r=await sb.from('settings').upsert({key,value});if(r.error)throw r.error;reload()});
+ const role=safe(async(id,r)=>{const x=await sb.from('profiles').update({role:r}).eq('id',id);if(x.error)throw x.error;lp()});
+  return <div className="space-y-4"><StokBanner/><div className="grid grid-cols-2 md:grid-cols-3 gap-3">{[['Omzet (lunas)',rp(om)],['Total Order',o.length],['Menunggu verifikasi',o.filter(x=>x.pay_status==='menunggu_verifikasi').length]].map(([k,v])=><Card key={k}><div className="text-xs text-slate-500">{k}</div><div className="text-lg font-bold">{v}</div></Card>)}</div>
+ <div className="grid md:grid-cols-2 gap-4"><Card t="Pemasukan 7 Hari"><div className="flex items-end gap-2 h-32">{days.map(d=><div key={d.d} className="flex-1 text-center text-[10px]"><div className="bg-sky-500 rounded-t" style={{height:d.v/mx*100+'%',minHeight:2}}/>{d.d}</div>)}</div>
+  <div className="text-sm mt-3">Metode bayar: {Object.entries(mx0).map(([k,v])=>`${k} (${v})`).join(', ')||'-'}</div></Card>
+ <ProfilNota key={[st.biz_name,st.biz_address,st.biz_phone,st.biz_footer].join("|")} st={st} reload={reload}/>
+ <Card t="Pembayaran Outlet"><label className="block text-xs">Upload gambar QRIS<input type="file" accept="image/*" onChange={e=>e.target.files[0]&&shrink(e.target.files[0],safe(async i=>setS('qris_url',await put(i,'qris/qris.jpg'))),700)}/></label>
+  {st.qris_url&&<img src={st.qris_url} className="w-36 mt-2 rounded border"/>}
+  <div className="flex gap-2 mt-3"><I placeholder="Rekening: BCA 123 a.n. ..." value={rk} onChange={e=>setRk(e.target.value)}/><B onClick={()=>setS('rekening',rk)}>Simpan</B></div></Card>
+ <Card c="md:col-span-2"><label className="text-sm">Periode laporan: <input type="month" className="border rounded-lg px-2 py-1 text-sm ml-1" value={m} onChange={e=>e.target.value&&setM(e.target.value)}/></label></Card>
+ <HalamanDepan key={'ld:'+(st.landing_text||'')} st={st} reload={reload}/>
+ <AturanCOD key={'cod:'+[st.cod_min_done,st.cod_max_open,st.cod_strike_limit,st.order_strike_limit].join('|')} st={st} reload={reload}/>
+ <Penyimpanan/>
+ <Keuangan m={m} st={st}/>
+ <SDM key={m+'|'+[st.commission_per_order,st.outlet_lat,st.outlet_lng,st.outlet_radius,st.geofence_on].join('|')} m={m} st={st} reload={reload}/>
+ <Inventaris admin/>
+ <EstStandar key={[st.regular_days,st.express_hours].join('|')} st={st} reload={reload}/>
+ <Undangan/>
+ <Tarif sv={sv} reload={reloadSv}/>
+ <Card t="Pengguna & Peran" c="md:col-span-2">{pr.map(p=><div key={p.id} className="flex items-center gap-2 py-1 text-sm border-b"><span className="flex-1">{p.full_name||'-'} · {p.phone||'-'}</span>
+  <select className="border rounded px-1 py-1 text-sm" value={p.role} onChange={e=>role(p.id,e.target.value)}>{['customer','driver','kasir','karyawan','owner'].map(r=><option key={r}>{r}</option>)}</select></div>)}</Card></div></div>}
+
+const LAND_DEF='Cucian bersih, wangi, dan rapi: kiloan, satuan, dry cleaning, hingga karpet. Kami jemput dan antar langsung ke rumah Anda, status pesanan bisa dipantau kapan saja, dan pembayaran bisa lewat QRIS, transfer, atau tunai saat diterima.\n\nBaru pertama kali? Buat akun gratis dulu supaya pesanan Anda tercatat dan bisa dilacak. Cukup isi nama, nomor WhatsApp, email, dan password. Setelah itu pilih layanan dan isi form pesanan.';
+function LandingCard({st,onStart,onLogin,preview}){const name=st.biz_name||CFG.name||'LaundryKu',txt=(st.landing_text||LAND_DEF).slice(0,500),tel=(st.biz_phone||'').replace(/[^0-9+]/g,'');
+ return <div className="max-w-md mx-auto bg-white rounded-2xl shadow-lg overflow-hidden" style={{minHeight:preview?0:'72vh'}}>
+  <div className="bg-gradient-to-br from-sky-600 to-cyan-500 text-white px-5 pt-7 pb-9 text-center">
+   {st.biz_logo?<img src={st.biz_logo} alt="" className="h-20 w-20 mx-auto rounded-2xl bg-white object-contain p-1 shadow"/>:<div className="h-20 w-20 mx-auto rounded-2xl bg-white/20 flex items-center justify-center text-4xl">🧺</div>}
+   <h1 className="text-2xl font-bold mt-3">{name}</h1><div className="text-xs text-sky-100 mt-1">Laundry antar-jemput · pantau pesanan online</div></div>
+  <div className="px-5 py-5 -mt-4 bg-white rounded-t-2xl space-y-3">
+   <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-line">{txt}</p>
+   {(st.biz_address||st.biz_phone)&&<div className="rounded-xl bg-slate-50 p-3 text-xs space-y-1 text-slate-600">{st.biz_address&&<div>📍 {st.biz_address}</div>}{st.biz_phone&&<div>📞 <a className="text-sky-700 underline" href={'tel:'+tel}>{st.biz_phone}</a></div>}</div>}
+   <B className="w-full py-3 text-base" onClick={onStart}>✨ Buat Akun & Pesan Sekarang</B>
+   <div className="text-center text-sm text-slate-600">Sudah punya akun? <span className="text-sky-700 font-semibold cursor-pointer" onClick={onLogin}>Masuk</span></div>
+   <div className="text-[11px] text-center text-slate-400">Karyawan (kasir/kurir/staf): masuk atau daftar dengan kode undangan dari Owner.</div></div></div>}
+function HalamanDepan({st,reload}){const [v,setV]=useState(st.landing_text||LAND_DEF),[pv,setPv]=useState(false);
+ const save=safe(async()=>{const r=await sb.from('settings').upsert({key:'landing_text',value:v.slice(0,500)});if(r.error)throw r.error;reload();alert('Halaman depan tersimpan')});
+ return <Card t="Halaman Depan (calon pelanggan)" c="md:col-span-2"><div className="text-xs text-slate-500 mb-2">Teks ini tampil pertama kali saat orang membuka alamat web Anda, diakhiri tombol "Buat Akun & Pesan". Logo, nama usaha, alamat, dan telepon diambil dari "Profil & Tampilan Nota".</div>
+  <textarea className="border rounded-lg px-2 py-2 text-sm w-full" rows="7" maxLength={500} value={v} onChange={e=>setV(e.target.value)}/>
+  <div className="flex items-center gap-2 mt-1"><span className={'text-xs '+(v.length>=480?'text-red-600':'text-slate-500')}>{v.length}/500 karakter</span><B onClick={save}>Simpan</B><B c="bg-slate-500" onClick={()=>setPv(!pv)}>{pv?'Tutup pratinjau':'Pratinjau'}</B><B c="bg-slate-400" onClick={()=>setV(LAND_DEF)}>Isi contoh</B></div>
+  {pv&&<div className="mt-3"><LandingCard preview st={{...st,landing_text:v}} onStart={()=>{}} onLogin={()=>{}}/></div>}</Card>}
+function AturanCOD({st,reload}){const K=[['cod_min_done','Pesanan selesai minimal sebelum pelanggan boleh COD','1'],['cod_max_open','Maksimal pesanan COD yang sedang berjalan','1'],['cod_strike_limit','COD dimatikan setelah pelanggaran ke-','2'],['order_strike_limit','Akun dibatasi (tidak bisa pesan) setelah pelanggaran ke-','4']];
+ const [v,setV]=useState(()=>Object.fromEntries(K.map(([k,,d])=>[k,st[k]||d]))),[bad,setBad]=useState([]);
+ const ld=()=>sb.from('customers').select('id,name,phone,strikes').gt('strikes',0).order('strikes',{ascending:false}).then(r=>r.data&&setBad(r.data));useEffect(()=>{ld()},[]);
+ const save=safe(async()=>{const r=await sb.from('settings').upsert(K.map(([k])=>({key:k,value:String(Math.max(0,parseInt(v[k])||0))})));if(r.error)throw r.error;reload();alert('Aturan tersimpan')});
+ const reset=safe(async c=>{const r=await sb.from('customers').update({strikes:0}).eq('id',c.id);if(r.error)throw r.error;ld()});
+ return <Card t="Aturan Anti Order Fiktif (COD)" c="md:col-span-2"><div className="text-xs text-slate-500 mb-2">Pelanggaran dicatat saat kurir/kasir melaporkan pelanggan tidak ditemui. Pelanggan baru tidak bisa COD sampai pesanan pertamanya selesai.</div>
+  <div className="grid md:grid-cols-2 gap-2">{K.map(([k,l])=><label key={k} className="text-xs">{l}<I type="number" min="0" value={v[k]} onChange={e=>setV({...v,[k]:e.target.value})}/></label>)}</div><B className="mt-2" onClick={save}>Simpan Aturan</B>
+  <div className="text-sm font-semibold mt-4">Pelanggan dengan pelanggaran</div>{bad.length?bad.map(c=><div key={c.id} className="flex items-center gap-2 py-1 text-sm border-b"><span className="flex-1">{c.name} · {c.phone}</span><span className="text-red-600 font-semibold">{c.strikes}×</span><B c="bg-slate-500" onClick={()=>reset(c)}>Reset</B></div>):<div className="text-xs text-slate-400">Belum ada.</div>}</Card>}
+function App(){const [u,setU]=useState(undefined),[rec,setRec]=useState(false),[role,setRole]=useState(null),[tab,setTab]=useState(null),[sv,setSv]=useState([]),[st,setSt]=useState({}),[gate,setGate]=useState('landing'),[am,setAm]=useState('daftar'),[stOk,setStOk]=useState(false);
+ const loadSv=()=>sb.from('services').select('*').eq('active',true).order('id').then(r=>setSv(r.data||[]));
+ const reload=()=>sb.from('settings').select('*').then(r=>setSt(Object.fromEntries((r.data||[]).map(x=>[x.key,x.value]))));
+ useEffect(()=>{if(!sb)return;sb.auth.getSession().then(({data})=>setU(data.session?data.session.user:null));const {data:l}=sb.auth.onAuthStateChange((ev,s)=>{if(ev==='PASSWORD_RECOVERY')setRec(true);setU(s?s.user:null)});return()=>l.subscription.unsubscribe()},[]);
+ useEffect(()=>{if(!u)return setRole(null);sb.from('profiles').select('role').eq('id',u.id).maybeSingle().then(r=>setRole(r.data?r.data.role:'customer'));loadSv();reload()},[u]);
+ useEffect(()=>{if(sb&&u===null)Promise.resolve(reload()).then(()=>setStOk(true),()=>setStOk(true))},[u]);
+ if(!sb)return <Setup/>;if(u===undefined)return null;if(rec&&u)return <ResetPass done={()=>setRec(false)}/>;if(!u)return gate==='auth'?<div className="p-3"><Auth start={am} back={()=>setGate('landing')}/></div>:<div className="p-3 pt-6">{stOk?<LandingCard st={st} onStart={()=>{setAm('daftar');setGate('auth')}} onLogin={()=>{setAm('login');setGate('auth')}}/>:<div className="text-center text-sm text-slate-500 mt-24">Memuat…</div>}</div>;if(!role)return <div className="p-4 text-sm">Memuat…</div>;
+ const T={customer:['Pelanggan'],driver:['Driver'],kasir:['Kasir'],karyawan:['Absensi'],owner:['Owner','Kasir','Driver','Pelanggan']}[role],cur=tab&&T.includes(tab)?tab:T[0];
+ return <UnreadProvider role={role}><div className="max-w-6xl mx-auto p-3"><header className="sticky top-0 z-30 bg-slate-100/95 backdrop-blur py-2 flex flex-wrap items-center gap-2 mb-4"><h1 className="text-xl font-bold text-sky-700">🧺 {CFG.name||'LaundryKu'}</h1><span className="text-xs text-slate-500">{u.email} · {role}</span>
+  <nav className="ml-auto flex gap-1 flex-wrap">{T.length>1&&T.map(x=><TabBtn key={x} x={x} cur={cur} role={role} on={setTab}/>)}<B c="bg-slate-600" onClick={()=>sb.auth.signOut()}>Keluar</B></nav></header>
+  {cur==='Pelanggan'?<Customer u={u} sv={sv} st={st}/>:cur==='Absensi'?<div className="max-w-md mx-auto"><Absen u={u}/></div>:cur==='Driver'?<Driver u={u} st={st}/>:cur==='Kasir'?<Kasir sv={sv} st={st} u={u} reload={reload}/>:<Owner st={st} reload={reload} sv={sv} reloadSv={loadSv}/>}</div></UnreadProvider>}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script></body></html>
